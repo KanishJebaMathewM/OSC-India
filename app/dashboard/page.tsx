@@ -202,7 +202,7 @@ export default async function DashboardPage(props: {
   const profileId = String(profile?.id || queryUserId);
   const cleanAdminHandle = (githubUsername || (profile?.github as string) || "").replace(/^@+/, "").toLowerCase().trim();
 
-  let userContributions: Array<{
+  interface DashboardContribution {
     id: string;
     type?: string;
     github_url: string;
@@ -210,7 +210,9 @@ export default async function DashboardPage(props: {
     points_awarded?: number;
     contributed_at?: string;
     projects?: { id?: string; name?: string; github_repo_url?: string } | Array<{ id?: string; name?: string; github_repo_url?: string }> | null;
-  }> | null = null;
+  }
+
+  let userContributions: DashboardContribution[] = [];
 
   if (rawRole === "project-admin" && cleanAdminHandle) {
     // 1. Find all repositories owned by this project admin
@@ -233,14 +235,14 @@ export default async function DashboardPage(props: {
         .select("id, type, github_url, status, points_awarded, contributed_at, projects(id, name, github_repo_url)")
         .in("project_id", managedProjectIds)
         .order("contributed_at", { ascending: false });
-      userContributions = adminContribs as typeof userContributions;
+      userContributions = ((adminContribs as unknown) as DashboardContribution[]) || [];
     } else {
       const { data: fallbackContribs } = await admin
         .from("contributions")
         .select("id, type, github_url, status, points_awarded, contributed_at, projects(id, name, github_repo_url)")
         .or(`user_id.eq.${queryUserId},user_id.eq.${profileId}`)
         .order("contributed_at", { ascending: false });
-      userContributions = fallbackContribs as typeof userContributions;
+      userContributions = ((fallbackContribs as unknown) as DashboardContribution[]) || [];
     }
   } else {
     // Regular contributor: query PRs authored by this user
@@ -249,7 +251,7 @@ export default async function DashboardPage(props: {
       .select("id, type, github_url, status, points_awarded, contributed_at, projects(id, name, github_repo_url)")
       .or(`user_id.eq.${queryUserId},user_id.eq.${profileId}`)
       .order("contributed_at", { ascending: false });
-    userContributions = contribs as typeof userContributions;
+    userContributions = ((contribs as unknown) as DashboardContribution[]) || [];
   }
 
   // Viewer profile payload for navbar
@@ -500,16 +502,9 @@ export default async function DashboardPage(props: {
           </span>
         </div>
 
-        {userContributions && userContributions.length > 0 ? (
+        {userContributions.length > 0 ? (
           <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: "12px", marginBottom: "48px" }}>
-            {(userContributions as Array<{
-              id?: string;
-              type?: string;
-              github_url: string;
-              points_awarded?: number;
-              contributed_at?: string;
-              projects?: { name?: string } | Array<{ name?: string }> | null;
-            }>).map((c) => {
+            {userContributions.map((c) => {
               const project = Array.isArray(c.projects) ? c.projects[0] : c.projects;
               const projectName = project?.name || "Official Project";
               const cleanUrl = (c.github_url || "").replace(/^merged:/, "");
