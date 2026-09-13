@@ -151,7 +151,7 @@ function BadgeContent({
   const searchParams = useSearchParams();
   // Force all users to get the contributor badge, disabling mentor/admin themes.
   // The themes are preserved below for future use.
-  const person = "contributor";
+  const person: string = "contributor";
   const [badgesCount, setBadgesCount] = useState(initialBadgesCreated);
   
   let roleText = "CONTRIBUTOR";
