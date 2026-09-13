@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { verifyAdminSession } from "@/lib/auth/admin-auth";
 import { createClient } from "@/lib/supabase/server";
-import { extractRepoSlug, OFFICIAL_COMPETITION_REPO_SLUGS } from "@/lib/utils/github-helpers";
+import { extractRepoSlug, OFFICIAL_COMPETITION_REPO_SLUGS, getGitHubAuthHeaders } from "@/lib/utils/github-helpers";
 
 export interface ProjectItem {
   id: string;
@@ -386,6 +386,237 @@ export async function getDbAllowedRepoSlugs(): Promise<Set<string>> {
   _slugCache = allowed;
   _slugCacheAt = Date.now();
   return allowed;
+}
+
+export interface DiscoveredProjectResult {
+  success: boolean;
+  topic: string;
+  totalFound: number;
+  addedCount: number;
+  updatedCount: number;
+  projects: ProjectItem[];
+  error?: string;
+}
+
+const LANGUAGE_COLORS: Record<string, string> = {
+  TypeScript: "#3178c6",
+  JavaScript: "#f7df1e",
+  Python: "#3b82f6",
+  Rust: "#dea584",
+  Go: "#00add8",
+  Java: "#b07219",
+  "C++": "#a855f7",
+  C: "#555555",
+  Dart: "#00b4ab",
+  Flutter: "#FF7518",
+  Kotlin: "#a97bff",
+  Swift: "#f05138",
+  Ruby: "#701516",
+  PHP: "#4f5d95",
+  HTML: "#e34c26",
+  CSS: "#563d7c",
+};
+
+interface GitHubSearchRepoItem {
+  id: number;
+  name: string;
+  full_name: string;
+  html_url: string;
+  description: string | null;
+  language: string | null;
+  stargazers_count: number;
+  forks_count: number;
+  topics?: string[];
+  owner?: {
+    login: string;
+    type?: string;
+    avatar_url?: string;
+  };
+}
+
+// In-memory discovery cache with 30-minute TTL to protect GitHub Search API limits (30 req/min)
+let _discoveryCache: { timestamp: number; topic: string; result: DiscoveredProjectResult } | null = null;
+const DISCOVERY_CACHE_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * Discovers and ingests participating repositories dynamically using GitHub's Search API.
+ * Maintainers simply add the topic tag (default: 'osci-2026') to their repository settings.
+ *
+ * Query format: topic:{topic} fork:false
+ * Auto-upserts newly discovered repositories into public.projects and synchronizes the local cache.
+ */
+export async function discoverProjectsByTopic(
+  topic = "osci-2026",
+  forceRefresh = false
+): Promise<DiscoveredProjectResult> {
+  const cleanTopic = topic.trim().toLowerCase().replace(/^#/, "");
+
+  if (
+    !forceRefresh &&
+    _discoveryCache &&
+    _discoveryCache.topic === cleanTopic &&
+    Date.now() - _discoveryCache.timestamp < DISCOVERY_CACHE_TTL_MS
+  ) {
+    return _discoveryCache.result;
+  }
+
+  const headers = getGitHubAuthHeaders();
+  const searchUrl = `https://api.github.com/search/repositories?q=topic:${encodeURIComponent(cleanTopic)}+fork:false&sort=updated&order=desc&per_page=100`;
+
+  let githubItems: GitHubSearchRepoItem[] = [];
+
+  try {
+    const res = await fetch(searchUrl, {
+      headers,
+      next: { revalidate: 0 },
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      console.warn(`Notice: GitHub repository search for topic "${cleanTopic}" failed (${res.status}): ${errText}`);
+      const fallbackProjects = await getProjects();
+      const failResult: DiscoveredProjectResult = {
+        success: false,
+        topic: cleanTopic,
+        totalFound: 0,
+        addedCount: 0,
+        updatedCount: 0,
+        projects: fallbackProjects,
+        error: `GitHub API error (${res.status}): ${res.statusText}`,
+      };
+      return failResult;
+    }
+
+    const data = await res.json();
+    if (Array.isArray(data.items)) {
+      githubItems = data.items;
+    }
+  } catch (err: unknown) {
+    console.warn("Notice: Exception querying GitHub Search API for topic repos:", err);
+    const fallbackProjects = await getProjects();
+    return {
+      success: false,
+      topic: cleanTopic,
+      totalFound: 0,
+      addedCount: 0,
+      updatedCount: 0,
+      projects: fallbackProjects,
+      error: err instanceof Error ? err.message : "Search API request failed",
+    };
+  }
+
+  let addedCount = 0;
+  let updatedCount = 0;
+
+  try {
+    const admin = createAdminClient();
+
+    // Fetch existing projects from database to match by repo slug
+    const { data: dbRows, error: dbErr } = await admin
+      .from("projects")
+      .select("*");
+
+    if (dbErr) {
+      console.warn("Notice: Querying projects for topic discovery:", dbErr.message);
+    }
+
+    const existingBySlug = new Map<string, DbProjectRow>();
+    for (const row of (dbRows as DbProjectRow[]) || []) {
+      const slug = extractRepoSlug(row.github_repo_url || row.github_url || row.githubUrl);
+      if (slug) {
+        existingBySlug.set(slug, row);
+      }
+    }
+
+    const newProjectsToInsert: Array<{
+      name: string;
+      github_repo_url: string;
+      description: string;
+    }> = [];
+
+    for (const item of githubItems) {
+      const slug = extractRepoSlug(item.html_url);
+      if (!slug) continue;
+
+      const lang = item.language || "TypeScript";
+      const accentColor = LANGUAGE_COLORS[lang] || "#FF7518";
+      const stars = String(item.stargazers_count ?? 0);
+      const forks = String(item.forks_count ?? 0);
+      const rawDesc = item.description || "Community open source project participating in OSC India.";
+      const metaPayload = {
+        language: lang,
+        accentColor,
+        stars,
+        forks,
+      };
+      const dbDescription = `${rawDesc.trim()}\n<!--meta:${JSON.stringify(metaPayload)}-->`;
+
+      if (!existingBySlug.has(slug)) {
+        // New project discovered!
+        newProjectsToInsert.push({
+          name: item.name,
+          github_repo_url: item.html_url,
+          description: dbDescription,
+        });
+        addedCount++;
+      } else {
+        // Existing project: update stars/forks if changed
+        const existing = existingBySlug.get(slug)!;
+        const currentMeta = parseProjectFromDb(existing);
+        if (currentMeta.stars !== stars || currentMeta.forks !== forks) {
+          try {
+            await admin
+              .from("projects")
+              .update({ description: dbDescription, updated_at: new Date().toISOString() })
+              .eq("id", existing.id);
+            updatedCount++;
+          } catch {
+            // Non-critical update
+          }
+        }
+      }
+    }
+
+    if (newProjectsToInsert.length > 0) {
+      const { error: insertErr } = await admin
+        .from("projects")
+        .insert(newProjectsToInsert);
+
+      if (insertErr) {
+        console.warn("Notice: Inserting discovered projects:", insertErr.message);
+      }
+    }
+
+    // Invalidate caches so callers get fresh allowed repo slugs and project lists
+    await invalidateSlugCache();
+  } catch (syncErr) {
+    console.warn("Notice: Ingesting discovered projects to Supabase:", syncErr);
+  }
+
+  const allProjects = await getProjects();
+
+  // Revalidate public pages
+  try {
+    revalidatePath("/projects");
+    revalidatePath("/admin");
+  } catch {}
+
+  const finalResult: DiscoveredProjectResult = {
+    success: true,
+    topic: cleanTopic,
+    totalFound: githubItems.length,
+    addedCount,
+    updatedCount,
+    projects: allProjects,
+  };
+
+  _discoveryCache = {
+    timestamp: Date.now(),
+    topic: cleanTopic,
+    result: finalResult,
+  };
+
+  return finalResult;
 }
 
 /**

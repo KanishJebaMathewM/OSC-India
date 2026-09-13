@@ -12,7 +12,7 @@ import {
   setAdminSessionCookie,
   clearAdminSessionCookie,
 } from "@/lib/auth/admin-auth";
-import { getProjects, getDbAllowedRepoSlugs } from "./projects";
+import { getProjects, getDbAllowedRepoSlugs, discoverProjectsByTopic } from "./projects";
 
 /**
  * Validates that the current user has super admin privileges.
@@ -616,6 +616,33 @@ export async function deleteUserAction(
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to delete user.";
     return { success: false, error: message };
+  }
+}
+
+/**
+ * Triggers GitHub topic discovery from the Admin Portal.
+ * Automatically searches for repositories tagged with 'osci-2026' (or custom topic)
+ * and ingests them into the public.projects directory and database.
+ */
+export async function triggerRepoDiscoveryAction(topic = "osci-2026") {
+  await requireAdminOrProjectAdmin();
+  try {
+    const result = await discoverProjectsByTopic(topic, true);
+    revalidatePath("/projects");
+    revalidatePath("/admin");
+    return {
+      success: result.success,
+      topic: result.topic,
+      totalFound: result.totalFound,
+      addedCount: result.addedCount,
+      updatedCount: result.updatedCount,
+      projects: result.projects,
+      error: result.error,
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Repository topic discovery failed";
+    console.error("Admin repo discovery error:", err);
+    return { success: false, error: msg };
   }
 }
 
