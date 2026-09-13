@@ -91,11 +91,23 @@ export default async function LeaderboardPage(props: {
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
-  const { data: currentProfile } = await admin
+  let currentProfile = null;
+  const { data: profileByUserId } = await admin
     .from("profiles")
     .select("*")
     .eq("user_id", user.id)
     .maybeSingle();
+  currentProfile = profileByUserId;
+
+  // Fallback to id (PK) — trigger sets id but not user_id
+  if (!currentProfile) {
+    const { data: profileById } = await admin
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .maybeSingle();
+    currentProfile = profileById;
+  }
 
   const profilePayload = {
     id: user.id,
