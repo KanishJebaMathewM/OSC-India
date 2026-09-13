@@ -162,10 +162,13 @@ export async function syncGitHubContribution(
       const validMergePRs: Array<{
         repoSlug: string;
         prNumber: number;
+        difficulty: DifficultyLevel;
+        points: number;
         htmlUrl: string;
         mergedAt: string;
       }> = [];
       const seenPrKeys = new Set<string>();
+      const linkedIssuesCache = new Map<string, GitHubIssueItem | null>();
 
       for (const repoSlug of targetRepos) {
         const isOwner = repoSlug.split("/")[0].toLowerCase() === lowerHandle;
@@ -194,9 +197,52 @@ export async function syncGitHubContribution(
               const key = `${repoSlug}#${pr.number}`;
               if (!seenPrKeys.has(key)) {
                 seenPrKeys.add(key);
+
+                // Detect difficulty (Easy: 10, Medium: 20, Hard: 30, Expert: 50)
+                let prDifficulty = detectDifficulty({
+                  title: pr.title,
+                  body: pr.body,
+                  labels: pr.labels,
+                });
+
+                // Check linked issues for higher difficulty inheritance
+                const linkedNumbers = extractLinkedIssueNumbers(`${pr.title} ${pr.body || ""}`);
+                for (const num of linkedNumbers) {
+                  const cacheKey = `${repoSlug}#${num}`;
+                  const cached = linkedIssuesCache.get(cacheKey);
+                  let linkedIssue: GitHubIssueItem | null = cached ?? null;
+
+                  if (cached === undefined) {
+                    try {
+                      const issueRes = await fetch(
+                        `https://api.github.com/repos/${repoSlug}/issues/${num}`,
+                        { headers, next: { revalidate: 0 } }
+                      );
+                      if (issueRes.ok) {
+                        linkedIssue = await issueRes.json();
+                        linkedIssuesCache.set(cacheKey, linkedIssue);
+                      } else {
+                        linkedIssuesCache.set(cacheKey, null);
+                      }
+                    } catch {
+                      linkedIssuesCache.set(cacheKey, null);
+                    }
+                  }
+
+                  if (linkedIssue) {
+                    const issueDifficulty = detectDifficulty(linkedIssue);
+                    if (DIFFICULTY_RANK[issueDifficulty] > DIFFICULTY_RANK[prDifficulty]) {
+                      prDifficulty = issueDifficulty;
+                    }
+                  }
+                }
+
+                const points = DIFFICULTY_POINTS[prDifficulty];
                 validMergePRs.push({
                   repoSlug,
                   prNumber: pr.number,
+                  difficulty: prDifficulty,
+                  points,
                   htmlUrl: pr.html_url,
                   mergedAt: pr.merged_at || pr.closed_at || new Date().toISOString(),
                 });
@@ -209,7 +255,7 @@ export async function syncGitHubContribution(
         }
       }
 
-      const mergerScore = validMergePRs.length * MERGER_POINTS;
+      const mergerScore = validMergePRs.reduce((sum, p) => sum + p.points, 0);
       const contributedRepos = new Set(validMergePRs.map((p) => p.repoSlug));
 
       // Fetch projects to map repoSlug -> project_id
@@ -230,7 +276,7 @@ export async function syncGitHubContribution(
             type: "pr_merge",
             github_url: `merged:${pr.htmlUrl}`,
             status: "merged",
-            points_awarded: MERGER_POINTS,
+            points_awarded: pr.points,
             contributed_at: pr.mergedAt,
           });
         }
@@ -644,13 +690,13 @@ export async function syncAllProjectsAndContributors() {
   // Map: normalized github handle -> PRs merged by this person (for project-admin points)
   const mergerMap = new Map<
     string,
-    Array<{ repoSlug: string; prNumber: number; htmlUrl: string; mergedAt: string }>
+    Array<{ repoSlug: string; prNumber: number; difficulty: DifficultyLevel; points: number; htmlUrl: string; mergedAt: string }>
   >();
 
   // Map: repoSlug -> all merged PRs with OSCI'26 label in this repo
   const repoPrMap = new Map<
     string,
-    Array<{ repoSlug: string; prNumber: number; htmlUrl: string; mergedAt: string }>
+    Array<{ repoSlug: string; prNumber: number; difficulty: DifficultyLevel; points: number; htmlUrl: string; mergedAt: string }>
   >();
 
   const linkedIssuesCache = new Map<string, GitHubIssueItem | null>();
@@ -668,6 +714,8 @@ export async function syncAllProjectsAndContributors() {
     const authorHandle = normalizeGitHubHandle(rawAuthor || "").toLowerCase();
     if (!authorHandle || authorHandle.includes("[bot]")) return;
 
+    const prPoints = DIFFICULTY_POINTS[diff];
+
     if (!contributorPrMap.has(authorHandle)) {
       contributorPrMap.set(authorHandle, []);
     }
@@ -678,7 +726,7 @@ export async function syncAllProjectsAndContributors() {
         repoSlug,
         prNumber,
         difficulty: diff,
-        points: DIFFICULTY_POINTS[diff],
+        points: prPoints,
         htmlUrl,
         mergedAt,
       });
@@ -689,7 +737,14 @@ export async function syncAllProjectsAndContributors() {
     }
     const rList = repoPrMap.get(repoSlug)!;
     if (!rList.some((p) => p.prNumber === prNumber)) {
-      rList.push({ repoSlug, prNumber, htmlUrl, mergedAt });
+      rList.push({
+        repoSlug,
+        prNumber,
+        difficulty: diff,
+        points: prPoints,
+        htmlUrl,
+        mergedAt,
+      });
     }
   }
 
@@ -697,18 +752,28 @@ export async function syncAllProjectsAndContributors() {
     rawMerger: string,
     repoSlug: string,
     prNumber: number,
+    diff: DifficultyLevel,
     htmlUrl: string,
     mergedAt: string
   ) {
     const mergerHandle = normalizeGitHubHandle(rawMerger || "").toLowerCase();
     if (!mergerHandle || mergerHandle.includes("[bot]")) return;
 
+    const prPoints = DIFFICULTY_POINTS[diff];
+
     if (!mergerMap.has(mergerHandle)) {
       mergerMap.set(mergerHandle, []);
     }
     const list = mergerMap.get(mergerHandle)!;
     if (!list.some((m) => m.repoSlug === repoSlug && m.prNumber === prNumber)) {
-      list.push({ repoSlug, prNumber, htmlUrl, mergedAt });
+      list.push({
+        repoSlug,
+        prNumber,
+        difficulty: diff,
+        points: prPoints,
+        htmlUrl,
+        mergedAt,
+      });
     }
   }
 
@@ -787,10 +852,10 @@ export async function syncAllProjectsAndContributors() {
           const prMergedAt = pr.merged_at || pr.closed_at || new Date().toISOString();
           registerPr(rawAuthor, repoSlug, pr.number, prDifficulty, pr.html_url, prMergedAt);
 
-          // Track who merged this PR — project-admins earn MERGER_POINTS per PR they merge
+          // Track who merged this PR — project-admins earn difficulty points per PR they merge
           const rawMerger = pr.merged_by?.login;
           if (rawMerger && rawMerger.toLowerCase() !== rawAuthor.toLowerCase()) {
-            registerMerge(rawMerger, repoSlug, pr.number, pr.html_url, prMergedAt);
+            registerMerge(rawMerger, repoSlug, pr.number, prDifficulty, pr.html_url, prMergedAt);
           }
         }
 
@@ -971,7 +1036,7 @@ export async function syncAllProjectsAndContributors() {
     // Aggregate all PRs this admin gets credit for:
     // 1. All PRs in repositories owned by this admin
     // 2. All PRs merged by this admin in any competition repo
-    const mergedByAdmin = new Map<string, { repoSlug: string; prNumber: number; htmlUrl: string; mergedAt: string }>();
+    const mergedByAdmin = new Map<string, { repoSlug: string; prNumber: number; difficulty: DifficultyLevel; points: number; htmlUrl: string; mergedAt: string }>();
     for (const handle of userHandles) {
       // Repos owned by this admin
       for (const [slug, prs] of repoPrMap.entries()) {
@@ -993,12 +1058,13 @@ export async function syncAllProjectsAndContributors() {
 
     if (mergedByAdmin.size === 0) continue;
 
-    const mergerScore = mergedByAdmin.size * MERGER_POINTS;
+    const userMergePrs = Array.from(mergedByAdmin.values());
+    const mergerScore = userMergePrs.reduce((sum, p) => sum + p.points, 0);
     const primaryHandle = prof?.github || meta.github || meta.user_name || Array.from(userHandles)[0] || null;
-    const adminProjects = new Set(Array.from(mergedByAdmin.values()).map((m) => m.repoSlug));
+    const adminProjects = new Set(userMergePrs.map((m) => m.repoSlug));
 
     // Store each merged PR as a "pr_merge" contribution row
-    for (const m of mergedByAdmin.values()) {
+    for (const m of userMergePrs) {
       const projId = projectMap.get(m.repoSlug);
       if (projId && m.htmlUrl) {
         allContribRows.push({
@@ -1008,7 +1074,7 @@ export async function syncAllProjectsAndContributors() {
           // Unique key: prefix URL so it doesn't collide with the contributor's "pr" row
           github_url: `merged:${m.htmlUrl}`,
           status: "merged",
-          points_awarded: MERGER_POINTS,
+          points_awarded: m.points,
           contributed_at: m.mergedAt,
         });
       }
