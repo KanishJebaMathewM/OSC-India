@@ -461,6 +461,7 @@ export default async function DashboardPage(props: {
           </div>
         </div>
 
+
         {/* Section Divider */}
         <div style={{ width: "100%", display: "flex", alignItems: "center", gap: "16px", margin: "48px 0" }}>
           <div style={{ flex: 1, height: "1px", background: "rgba(255,255,255,0.05)" }} />
@@ -477,6 +478,7 @@ export default async function DashboardPage(props: {
         <div style={{ width: "100%", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: "24px", padding: "clamp(16px, 4vw, 32px)", marginBottom: "48px", overflowX: "auto" }}>
           <ActivityMatrix providerAccountId={githubUsername} isReadOnly={!isOwnProfile} />
         </div>
+
 
         {/* Section Divider */}
         <div style={{ width: "100%", display: "flex", alignItems: "center", gap: "16px", margin: "24px 0 48px" }}>
