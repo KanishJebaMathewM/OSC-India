@@ -4,7 +4,7 @@ import React, { useState, useTransition, useEffect } from "react";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import { Profile } from "@/lib/supabase/database";
-import { updateUserRole, updateUserScore, updateUserGithub, syncSingleUser, syncAllUsers, deleteUserAction, adminLogoutAction, getAdminData } from "@/lib/actions/admin";
+import { updateUserRole, updateUserScore, updateUserGithub, syncSingleUser, syncAllUsers, deleteUserAction, adminLogoutAction, getAdminData, triggerRepoDiscoveryAction } from "@/lib/actions/admin";
 import { createProjectAction, deleteProjectAction, deleteAllProjectsAction, ProjectItem, NewProjectInput } from "@/lib/actions/projects";
 
 // Icons
@@ -208,6 +208,7 @@ export default function AdminUI({ initialProfiles, initialMetrics, initialProjec
   const [isDeletingAllProjects, setIsDeletingAllProjects] = useState(false);
   const [userToDelete, setUserToDelete] = useState<{ id: string; name: string; email?: string } | null>(null);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
+  const [isDiscoveringRepos, setIsDiscoveringRepos] = useState(false);
 
   const [newProject, setNewProject] = useState<NewProjectInput>({
     title: "",
@@ -309,6 +310,29 @@ export default function AdminUI({ initialProfiles, initialMetrics, initialProjec
       showToast(err instanceof Error ? err.message : "Failed to add project.", "error");
     } finally {
       setIsSubmittingProject(false);
+    }
+  };
+
+  // Handle GitHub Topic Discovery
+  const handleDiscoverProjects = async () => {
+    setIsDiscoveringRepos(true);
+    try {
+      const res = await triggerRepoDiscoveryAction("osci-2026");
+      if (res.success) {
+        if (res.projects && res.projects.length > 0) {
+          setProjects(res.projects);
+        }
+        showToast(
+          `Discovery complete! Found ${res.totalFound} repos tagged #osci-2026 (${res.addedCount} new, ${res.updatedCount} updated).`,
+          "success"
+        );
+      } else {
+        showToast(res.error || "Failed to discover repositories.", "error");
+      }
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : "Discovery request failed.", "error");
+    } finally {
+      setIsDiscoveringRepos(false);
     }
   };
 
@@ -949,6 +973,33 @@ export default function AdminUI({ initialProfiles, initialMetrics, initialProjec
               </button>
             )}
 
+            {activeTab === "projects" && (
+              <button
+                onClick={handleDiscoverProjects}
+                disabled={isDiscoveringRepos}
+                style={{
+                  background: "rgba(56, 189, 248, 0.1)",
+                  border: "1px solid rgba(56, 189, 248, 0.25)",
+                  color: "#38bdf8",
+                  padding: "8px 14px",
+                  borderRadius: "10px",
+                  fontSize: "12px",
+                  fontWeight: 700,
+                  cursor: isDiscoveringRepos ? "not-allowed" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  transition: "all 0.2s",
+                  opacity: isDiscoveringRepos ? 0.6 : 1,
+                }}
+                className="hover:bg-[rgba(56,189,248,0.2)] hover:border-[rgba(56,189,248,0.4)] active:scale-[0.98]"
+                title="Automatically discover repositories tagged with 'osci-2026' on GitHub"
+              >
+                <SearchIcon className="w-3.5 h-3.5" />
+                <span>{isDiscoveringRepos ? "Discovering..." : "Discover Repos (#osci-2026)"}</span>
+              </button>
+            )}
+
             <button
               onClick={() => setShowAddProjectModal(true)}
               style={{
@@ -1460,22 +1511,43 @@ export default function AdminUI({ initialProfiles, initialMetrics, initialProjec
                         <p style={{ fontSize: "13px", color: "#6b7280", maxWidth: "380px", margin: 0 }}>
                           No repository records match your criteria. Add a project to showcase it in the public OSC India directory.
                         </p>
-                        <button
-                          onClick={() => setShowAddProjectModal(true)}
-                          style={{
-                            marginTop: "8px",
-                            background: "linear-gradient(135deg, #FF7518 0%, #FF5500 100%)",
-                            border: "none",
-                            color: "white",
-                            padding: "8px 18px",
-                            borderRadius: "10px",
-                            fontSize: "13px",
-                            fontWeight: 700,
-                            cursor: "pointer"
-                          }}
-                        >
-                          + Add New Project
-                        </button>
+                        <div style={{ display: "flex", gap: "10px", marginTop: "8px", flexWrap: "wrap", justifyContent: "center" }}>
+                          <button
+                            onClick={handleDiscoverProjects}
+                            disabled={isDiscoveringRepos}
+                            style={{
+                              background: "rgba(56, 189, 248, 0.1)",
+                              border: "1px solid rgba(56, 189, 248, 0.25)",
+                              color: "#38bdf8",
+                              padding: "8px 18px",
+                              borderRadius: "10px",
+                              fontSize: "13px",
+                              fontWeight: 700,
+                              cursor: isDiscoveringRepos ? "not-allowed" : "pointer",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "6px"
+                            }}
+                          >
+                            <SearchIcon className="w-3.5 h-3.5" />
+                            <span>{isDiscoveringRepos ? "Discovering..." : "Discover via GitHub Topics"}</span>
+                          </button>
+                          <button
+                            onClick={() => setShowAddProjectModal(true)}
+                            style={{
+                              background: "linear-gradient(135deg, #FF7518 0%, #FF5500 100%)",
+                              border: "none",
+                              color: "white",
+                              padding: "8px 18px",
+                              borderRadius: "10px",
+                              fontSize: "13px",
+                              fontWeight: 700,
+                              cursor: "pointer"
+                            }}
+                          >
+                            + Add New Project
+                          </button>
+                        </div>
                       </div>
                     </td>
                   </tr>

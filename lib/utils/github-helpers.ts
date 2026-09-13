@@ -197,3 +197,50 @@ export function extractRepoSlug(urlOrSlug?: string | null): string | null {
 
   return null;
 }
+
+// Module-level token pool for round-robin rotation across multiple GitHub PATs
+let cachedTokenPool: string[] | null = null;
+let tokenRotationIndex = 0;
+
+export function getTokenPool(): string[] {
+  if (cachedTokenPool !== null) {
+    return cachedTokenPool;
+  }
+  const pool: string[] = [];
+  for (let i = 1; i <= 5; i++) {
+    const t = process.env[`GITHUB_ACCESS_TOKEN_${i}`]?.trim();
+    if (t && !pool.includes(t)) pool.push(t);
+  }
+  const legacy = (process.env.GITHUB_ACCESS_TOKEN || process.env.GITHUB_PAT)?.trim();
+  if (legacy && !pool.includes(legacy)) pool.push(legacy);
+
+  cachedTokenPool = pool;
+  return pool;
+}
+
+/**
+ * Returns GitHub API headers with optimal rate-limiting:
+ * Prioritizes a round-robin token pool (GITHUB_ACCESS_TOKEN_1..5, GITHUB_ACCESS_TOKEN/PAT)
+ * to multiply the 5,000 req/hr API quota across available tokens.
+ * Falls back automatically to GitHub OAuth App Basic Auth (AUTH_GITHUB_ID/SECRET).
+ */
+export function getGitHubAuthHeaders(): Record<string, string> {
+  const pool = getTokenPool();
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github.v3+json",
+    "User-Agent": "OSC-India-Sync-Engine",
+  };
+
+  if (pool.length > 0) {
+    const token = pool[tokenRotationIndex % pool.length];
+    tokenRotationIndex = (tokenRotationIndex + 1) % pool.length;
+    headers.Authorization = `Bearer ${token}`;
+  } else {
+    const clientId = process.env.GITHUB_ID || process.env.AUTH_GITHUB_ID;
+    const clientSecret = process.env.GITHUB_SECRET || process.env.AUTH_GITHUB_SECRET;
+    if (clientId && clientSecret) {
+      headers.Authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
+    }
+  }
+  return headers;
+}

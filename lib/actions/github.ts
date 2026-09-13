@@ -1,7 +1,7 @@
 "use server";
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getDbAllowedRepoSlugs } from "@/lib/actions/projects";
+import { getDbAllowedRepoSlugs, discoverProjectsByTopic } from "@/lib/actions/projects";
 import { revalidatePath } from "next/cache";
 import {
   normalizeGitHubHandle,
@@ -12,6 +12,7 @@ import {
   DIFFICULTY_RANK,
   MERGER_POINTS,
   DifficultyLevel,
+  getGitHubAuthHeaders,
 } from "@/lib/utils/github-helpers";
 
 interface GitHubIssueItem {
@@ -25,53 +26,6 @@ interface GitHubIssueItem {
   pull_request?: { url?: string; html_url?: string };
   closed_at?: string;
   created_at?: string;
-}
-
-// Module-level token pool for round-robin rotation across multiple GitHub PATs
-let cachedTokenPool: string[] | null = null;
-let tokenRotationIndex = 0;
-
-function getTokenPool(): string[] {
-  if (cachedTokenPool !== null) {
-    return cachedTokenPool;
-  }
-  const pool: string[] = [];
-  for (let i = 1; i <= 5; i++) {
-    const t = process.env[`GITHUB_ACCESS_TOKEN_${i}`]?.trim();
-    if (t && !pool.includes(t)) pool.push(t);
-  }
-  const legacy = (process.env.GITHUB_ACCESS_TOKEN || process.env.GITHUB_PAT)?.trim();
-  if (legacy && !pool.includes(legacy)) pool.push(legacy);
-
-  cachedTokenPool = pool;
-  return pool;
-}
-
-/**
- * Returns GitHub API headers with optimal rate-limiting:
- * Prioritizes a round-robin token pool (GITHUB_ACCESS_TOKEN_1..5, GITHUB_ACCESS_TOKEN/PAT)
- * to multiply the 5,000 req/hr API quota across available tokens.
- * Falls back automatically to GitHub OAuth App Basic Auth (AUTH_GITHUB_ID/SECRET).
- */
-function getGitHubAuthHeaders(): Record<string, string> {
-  const pool = getTokenPool();
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github.v3+json",
-    "User-Agent": "OSC-India-Sync-Engine",
-  };
-
-  if (pool.length > 0) {
-    const token = pool[tokenRotationIndex % pool.length];
-    tokenRotationIndex = (tokenRotationIndex + 1) % pool.length;
-    headers.Authorization = `Bearer ${token}`;
-  } else {
-    const clientId = process.env.GITHUB_ID || process.env.AUTH_GITHUB_ID;
-    const clientSecret = process.env.GITHUB_SECRET || process.env.AUTH_GITHUB_SECRET;
-    if (clientId && clientSecret) {
-      headers.Authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
-    }
-  }
-  return headers;
 }
 
 /**
@@ -607,7 +561,14 @@ export async function syncAllProjectsAndContributors() {
   const admin = createAdminClient();
   const startTime = Date.now();
 
-  // 1. Fetch allowed projects strictly from database (guaranteed 17 competition repos)
+  // 0. Dynamically discover competition projects tagged with 'osci-2026' via GitHub Topics
+  try {
+    await discoverProjectsByTopic("osci-2026");
+  } catch (discErr) {
+    console.warn("Notice: GitHub topic project discovery in sync sweep:", discErr);
+  }
+
+  // 1. Fetch allowed projects strictly from database (guaranteed 17 competition repos + discovered repos)
   const allowedSlugs = await getDbAllowedRepoSlugs();
   if (allowedSlugs.size === 0) {
     return { success: false, error: "No tracked projects found in database." };
