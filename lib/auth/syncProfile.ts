@@ -67,7 +67,19 @@ export async function syncUserProfile(user: User) {
     existingProfile = byUserId as Profile;
   }
 
-  // 3. Fallback: search by GitHub handle if user_id not found
+  // 2.5 Fallback: search by id (PK) if user_id not populated
+  if (!existingProfile) {
+    const { data: byId } = await admin
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (byId) {
+      existingProfile = byId as Profile;
+    }
+  }
+
+  // 3. Fallback: search by GitHub handle if still not found
   if (!existingProfile && incomingGithub) {
     const cleanGh = incomingGithub.replace(/^@+/, "").trim().toLowerCase();
     const { data: byGithub } = await admin
