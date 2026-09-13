@@ -87,53 +87,66 @@ export function normalizeGitHubHandle(handle: string): string {
 }
 
 /**
+ * Returns whether an issue or PR has the official competition label (OSCI'26 / OSCI26).
+ */
+export function hasOsci26Label(item?: { labels?: Array<{ name: string } | string> } | null): boolean {
+  if (!item) return false;
+  const labels = item.labels || [];
+  return labels.some((l) => {
+    const name = (typeof l === "string" ? l : l.name || "").toLowerCase().trim();
+    return /osci[- ']?26|osci[- ']?2026/i.test(name);
+  });
+}
+
+/**
  * Detects difficulty level from labels, title, and body.
  * Prioritizes maintainer labels first, then explicit tags in titles or bodies.
  */
-export function detectDifficulty(item: { title?: string; body?: string | null; labels?: Array<{ name: string }> }): DifficultyLevel {
-  const labelNames = (item.labels || []).map((l) => l.name.toLowerCase()).join(" ");
+export function detectDifficulty(item: { title?: string; body?: string | null; labels?: Array<{ name: string } | string> }): DifficultyLevel {
+  const labelNames = (item.labels || [])
+    .map((l) => (typeof l === "string" ? l : l.name || "").toLowerCase())
+    .join(" ");
 
-  // 1. Check official maintainer labels first (highest precedence)
-  if (/expert|exp\b|advanced|level[- ]?4/i.test(labelNames)) {
+  // 1. Expert / Level 4 (50 pts)
+  if (
+    /expert|level[- :_]?4\b|lvl[- :_]?4\b|level4|lvl4|difficulty[- :_]+expert/i.test(labelNames)
+  ) {
     return "expert";
   }
-  if (/hard\b|difficulty[- :]+hard|level[- ]?3/i.test(labelNames)) {
+
+  // 2. Hard / Level 3 (30 pts)
+  if (
+    /hard\b|difficulty[- :_]+hard|level[- :_]?3\b|lvl[- :_]?3\b|level3|lvl3|advanced|complex/i.test(labelNames)
+  ) {
     return "hard";
   }
-  if (/medium|med\b|intermediate|mid\b|difficulty[- :]+medium|level[- ]?2/i.test(labelNames)) {
+
+  // 3. Medium / Level 2 (20 pts)
+  if (
+    /medium|med\b|intermediate|mid\b|difficulty[- :_]+medium|level[- :_]?2\b|lvl[- :_]?2\b|level2|lvl2/i.test(labelNames)
+  ) {
     return "medium";
   }
-  if (/easy|beginner|starter|good[ -]?first[ -]?issue|difficulty[- :]+easy|level[- ]?1/i.test(labelNames)) {
+
+  // 4. Easy / Level 1 (10 pts)
+  if (
+    /easy|beginner|starter|good[ -]?first[ -]?issue|difficulty[- :_]+easy|level[- :_]?1\b|lvl[- :_]?1\b|level1|lvl1/i.test(labelNames)
+  ) {
     return "easy";
   }
 
-  // 2. Check title for explicit bracketed tags or levels
-  const title = (item.title || "").toLowerCase();
-  if (/expert|advanced|level[- ]?4|\[expert\]|\(expert\)/i.test(title)) {
+  // Check title & body
+  const fullText = `${item.title || ""} ${item.body || ""}`.toLowerCase();
+  if (/\[expert\]|\(expert\)|level[- :_]?4\b|lvl[- :_]?4\b|level4|lvl4|difficulty:\s*expert/i.test(fullText)) {
     return "expert";
   }
-  if (/\[hard\]|\(hard\)|difficulty[- :]+hard|level[- ]?3/i.test(title)) {
+  if (/\[hard\]|\(hard\)|level[- :_]?3\b|lvl[- :_]?3\b|level3|lvl3|difficulty:\s*hard|\bhard\b/i.test(fullText)) {
     return "hard";
   }
-  if (/\[medium\]|\(medium\)|difficulty[- :]+medium|level[- ]?2/i.test(title)) {
+  if (/\[medium\]|\(medium\)|\[med\]|\(med\)|level[- :_]?2\b|lvl[- :_]?2\b|level2|lvl2|difficulty:\s*medium|\bmedium\b/i.test(fullText)) {
     return "medium";
   }
-  if (/\[easy\]|\(easy\)|good[ -]?first[ -]?issue|difficulty[- :]+easy|level[- ]?1/i.test(title)) {
-    return "easy";
-  }
-
-  // 3. Fallback to body for explicit difficulty declarations
-  const body = (item.body || "").toLowerCase();
-  if (/difficulty:\s*expert|level[- ]?4/i.test(body)) {
-    return "expert";
-  }
-  if (/difficulty:\s*hard|level[- ]?3/i.test(body)) {
-    return "hard";
-  }
-  if (/difficulty:\s*medium|level[- ]?2/i.test(body)) {
-    return "medium";
-  }
-  if (/difficulty:\s*easy|level[- ]?1/i.test(body)) {
+  if (/\[easy\]|\(easy\)|level[- :_]?1\b|lvl[- :_]?1\b|level1|lvl1|good[ -]?first[ -]?issue|difficulty:\s*easy|\beasy\b/i.test(fullText)) {
     return "easy";
   }
 

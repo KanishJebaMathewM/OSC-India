@@ -9,6 +9,7 @@ interface Contribution {
 
 interface ActivityMatrixProps {
   providerAccountId: string | null;
+  isReadOnly?: boolean;
 }
 
 interface CachedPayload {
@@ -26,7 +27,7 @@ function formatLocalDate(d: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-export default function ActivityMatrix({ providerAccountId }: ActivityMatrixProps) {
+export default function ActivityMatrix({ providerAccountId, isReadOnly = false }: ActivityMatrixProps) {
   const [contributions, setContributions] = useState<Contribution[]>(() => {
     if (typeof window === "undefined" || !providerAccountId) return [];
     try {
@@ -322,51 +323,94 @@ export default function ActivityMatrix({ providerAccountId }: ActivityMatrixProp
           )}
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+        {!isReadOnly && (
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+            {/* Direct GitHub username input for instant graph loading */}
+            {(!providerAccountId || !contributions.length) && (
+              <form
+                onSubmit={handleLinkAndSync}
+                style={{ display: "flex", alignItems: "center", gap: "6px" }}
+              >
+                <input
+                  type="text"
+                  placeholder="GitHub username"
+                  value={customHandle}
+                  onChange={(e) => setCustomHandle(e.target.value)}
+                  style={{
+                    background: "rgba(255,255,255,0.05)",
+                    border: "1px solid rgba(255,255,255,0.15)",
+                    borderRadius: "6px",
+                    padding: "4px 8px",
+                    fontSize: "12px",
+                    color: "white",
+                    outline: "none",
+                    width: "140px",
+                  }}
+                />
+                <button
+                  type="submit"
+                  disabled={isLinking || !customHandle.trim()}
+                  style={{
+                    background: "var(--orange)",
+                    border: "none",
+                    borderRadius: "6px",
+                    padding: "4px 10px",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    color: "white",
+                    cursor: isLinking ? "not-allowed" : "pointer",
+                    opacity: isLinking || !customHandle.trim() ? 0.6 : 1,
+                  }}
+                >
+                  {isLinking ? "Linking..." : "Link"}
+                </button>
+              </form>
+            )}
 
-          <button
-            type="button"
-            onClick={() => handleSync(undefined, true)}
-            disabled={isSyncing}
-            style={{
-              background: "rgba(255,255,255,0.04)",
-              border: "1px solid rgba(255,255,255,0.08)",
-              borderRadius: "8px",
-              padding: "6px 12px",
-              color: "#9ca3af",
-              fontSize: "12px",
-              cursor: isSyncing ? "not-allowed" : "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              opacity: isSyncing ? 0.5 : 1,
-              transition: "all 0.2s ease",
-            }}
-            className="hover:text-white hover:border-[rgba(255,255,255,0.2)]"
-          >
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+            <button
+              type="button"
+              onClick={() => handleSync(undefined, true)}
+              disabled={isSyncing}
               style={{
-                animation: isSyncing ? "spin 1s linear infinite" : "none",
-                transformOrigin: "center",
-                display: "block",
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: "8px",
+                padding: "6px 12px",
+                color: "#9ca3af",
+                fontSize: "12px",
+                cursor: isSyncing ? "not-allowed" : "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                opacity: isSyncing ? 0.5 : 1,
+                transition: "all 0.2s ease",
               }}
+              className="hover:text-white hover:border-[rgba(255,255,255,0.2)]"
             >
-              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-              <path d="M21 3v5h-5" />
-              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-              <path d="M8 16H3v5" />
-            </svg>
-            <span>{isSyncing ? "Syncing Activity..." : "Sync Activity"}</span>
-          </button>
-        </div>
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{
+                  animation: isSyncing ? "spin 1s linear infinite" : "none",
+                  transformOrigin: "center",
+                  display: "block",
+                }}
+              >
+                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                <path d="M8 16H3v5" />
+              </svg>
+              <span>{isSyncing ? "Syncing Activity..." : "Sync Activity"}</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {error && (
