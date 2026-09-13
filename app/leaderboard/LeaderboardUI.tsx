@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import { createClient } from "@/lib/supabase/client";
@@ -164,91 +165,124 @@ export default function LeaderboardUI({
           <div style={{ display: "flex", justifyContent: "center", alignItems: "flex-end", gap: "20px", marginBottom: "56px", width: "100%", flexWrap: "wrap" }}>
             {/* Rank 2 (Silver - Left) */}
             {rank2 && (
-              <div
-                style={{
-                  background: "rgba(255,255,255,0.02)",
-                  border: "1px solid rgba(203,213,225,0.3)",
-                  borderRadius: "20px",
-                  padding: "32px 24px",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  width: "260px",
-                  boxShadow: "0 10px 30px rgba(0,0,0,0.3)",
-                  position: "relative",
-                  order: 1,
-                }}
+              <Link
+                href={
+                  rank2.username && !rank2.username.startsWith("@contributor")
+                    ? `/dashboard?user=${encodeURIComponent(rank2.username.replace(/^@+/, ""))}`
+                    : `/dashboard?id=${rank2.id}`
+                }
+                style={{ textDecoration: "none", color: "inherit", order: 1 }}
+                className="group"
               >
-                <div style={{ width: "72px", height: "72px", borderRadius: "50%", border: "2px solid #cbd5e1", overflow: "hidden", background: "#1c1c1f", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  {rank2.avatar ? <img src={rank2.avatar} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span>{rank2.name?.[0] || "U"}</span>}
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.02)",
+                    border: "1px solid rgba(203,213,225,0.3)",
+                    borderRadius: "20px",
+                    padding: "32px 24px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    width: "260px",
+                    boxShadow: "0 10px 30px rgba(0,0,0,0.3)",
+                    position: "relative",
+                    transition: "all 0.2s ease",
+                  }}
+                  className="group-hover:border-[#cbd5e1] group-hover:scale-[1.02] cursor-pointer"
+                >
+                  <div style={{ width: "72px", height: "72px", borderRadius: "50%", border: "2px solid #cbd5e1", overflow: "hidden", background: "#1c1c1f", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {rank2.avatar ? <img src={rank2.avatar} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span>{rank2.name?.[0] || "U"}</span>}
+                  </div>
+                  <div style={{ color: "#cbd5e1", fontSize: "20px", fontWeight: 800, marginBottom: "4px" }}>🥈 #2</div>
+                  <div style={{ fontSize: "16px", fontWeight: 700, textAlign: "center", marginBottom: "2px" }} className="group-hover:text-[var(--orange)] transition-colors">{rank2.name}</div>
+                  <div style={{ color: "#9ca3af", fontSize: "12px", marginBottom: "16px" }}>{rank2.username}</div>
+                  <div style={{ fontSize: "28px", fontWeight: 800 }}>{rank2.points}</div>
+                  <div style={{ color: "#9ca3af", fontSize: "11px", marginBottom: "8px" }}>Points</div>
+                  <div style={{ color: "#cbd5e1", fontSize: "12px", fontWeight: 600 }}>{rank2.prs} Merged PRs</div>
                 </div>
-                <div style={{ color: "#cbd5e1", fontSize: "20px", fontWeight: 800, marginBottom: "4px" }}>🥈 #2</div>
-                <div style={{ fontSize: "16px", fontWeight: 700, textAlign: "center", marginBottom: "2px" }}>{rank2.name}</div>
-                <div style={{ color: "#9ca3af", fontSize: "12px", marginBottom: "16px" }}>{rank2.username}</div>
-                <div style={{ fontSize: "28px", fontWeight: 800 }}>{rank2.points}</div>
-                <div style={{ color: "#9ca3af", fontSize: "11px", marginBottom: "8px" }}>Points</div>
-                <div style={{ color: "#cbd5e1", fontSize: "12px", fontWeight: 600 }}>{rank2.prs} Merged PRs</div>
-              </div>
+              </Link>
             )}
 
             {/* Rank 1 (Gold - Center) */}
             {rank1 && (
-              <div
-                style={{
-                  background: "rgba(255,117,24,0.04)",
-                  border: "2px solid var(--orange)",
-                  borderRadius: "24px",
-                  padding: "44px 28px",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  width: "290px",
-                  boxShadow: "0 15px 40px rgba(255,117,24,0.15)",
-                  position: "relative",
-                  transform: "translateY(-12px)",
-                  order: 2,
-                }}
+              <Link
+                href={
+                  rank1.username && !rank1.username.startsWith("@contributor")
+                    ? `/dashboard?user=${encodeURIComponent(rank1.username.replace(/^@+/, ""))}`
+                    : `/dashboard?id=${rank1.id}`
+                }
+                style={{ textDecoration: "none", color: "inherit", order: 2 }}
+                className="group"
               >
-                <div style={{ position: "absolute", top: "-18px", fontSize: "28px" }}>👑</div>
-                <div style={{ width: "88px", height: "88px", borderRadius: "50%", border: "3px solid var(--orange)", overflow: "hidden", background: "#1c1c1f", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 20px rgba(255,117,24,0.4)" }}>
-                  {rank1.avatar ? <img src={rank1.avatar} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span>{rank1.name?.[0] || "U"}</span>}
+                <div
+                  style={{
+                    background: "rgba(255,117,24,0.04)",
+                    border: "2px solid var(--orange)",
+                    borderRadius: "24px",
+                    padding: "44px 28px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    width: "290px",
+                    boxShadow: "0 15px 40px rgba(255,117,24,0.15)",
+                    position: "relative",
+                    transform: "translateY(-12px)",
+                    transition: "all 0.2s ease",
+                  }}
+                  className="group-hover:shadow-[0_20px_50px_rgba(255,117,24,0.3)] group-hover:scale-[1.02] cursor-pointer"
+                >
+                  <div style={{ position: "absolute", top: "-18px", fontSize: "28px" }}>👑</div>
+                  <div style={{ width: "88px", height: "88px", borderRadius: "50%", border: "3px solid var(--orange)", overflow: "hidden", background: "#1c1c1f", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 20px rgba(255,117,24,0.4)" }}>
+                    {rank1.avatar ? <img src={rank1.avatar} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span>{rank1.name?.[0] || "U"}</span>}
+                  </div>
+                  <div style={{ color: "var(--orange)", fontSize: "24px", fontWeight: 900, marginBottom: "4px" }}>🥇 #1</div>
+                  <div style={{ fontSize: "18px", fontWeight: 800, textAlign: "center", marginBottom: "2px" }} className="group-hover:underline">{rank1.name}</div>
+                  <div style={{ color: "var(--orange)", fontSize: "13px", fontWeight: 500, marginBottom: "16px" }}>{rank1.username}</div>
+                  <div style={{ fontSize: "36px", fontWeight: 900, lineHeight: 1 }}>{rank1.points}</div>
+                  <div style={{ color: "#9ca3af", fontSize: "11px", marginBottom: "12px" }}>Points</div>
+                  <div style={{ color: "var(--orange)", fontSize: "13px", fontWeight: 700 }}>{rank1.prs} Merged PRs • {rank1.projects} Repos</div>
                 </div>
-                <div style={{ color: "var(--orange)", fontSize: "24px", fontWeight: 900, marginBottom: "4px" }}>🥇 #1</div>
-                <div style={{ fontSize: "18px", fontWeight: 800, textAlign: "center", marginBottom: "2px" }}>{rank1.name}</div>
-                <div style={{ color: "var(--orange)", fontSize: "13px", fontWeight: 500, marginBottom: "16px" }}>{rank1.username}</div>
-                <div style={{ fontSize: "36px", fontWeight: 900, lineHeight: 1 }}>{rank1.points}</div>
-                <div style={{ color: "#9ca3af", fontSize: "11px", marginBottom: "12px" }}>Points</div>
-                <div style={{ color: "var(--orange)", fontSize: "13px", fontWeight: 700 }}>{rank1.prs} Merged PRs • {rank1.projects} Repos</div>
-              </div>
+              </Link>
             )}
 
             {/* Rank 3 (Bronze - Right) */}
             {rank3 && (
-              <div
-                style={{
-                  background: "rgba(255,255,255,0.02)",
-                  border: "1px solid rgba(217,119,6,0.3)",
-                  borderRadius: "20px",
-                  padding: "32px 24px",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  width: "260px",
-                  boxShadow: "0 10px 30px rgba(0,0,0,0.3)",
-                  position: "relative",
-                  order: 3,
-                }}
+              <Link
+                href={
+                  rank3.username && !rank3.username.startsWith("@contributor")
+                    ? `/dashboard?user=${encodeURIComponent(rank3.username.replace(/^@+/, ""))}`
+                    : `/dashboard?id=${rank3.id}`
+                }
+                style={{ textDecoration: "none", color: "inherit", order: 3 }}
+                className="group"
               >
-                <div style={{ width: "72px", height: "72px", borderRadius: "50%", border: "2px solid #d97706", overflow: "hidden", background: "#1c1c1f", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  {rank3.avatar ? <img src={rank3.avatar} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span>{rank3.name?.[0] || "U"}</span>}
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.02)",
+                    border: "1px solid rgba(217,119,6,0.3)",
+                    borderRadius: "20px",
+                    padding: "32px 24px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    width: "260px",
+                    boxShadow: "0 10px 30px rgba(0,0,0,0.3)",
+                    position: "relative",
+                    transition: "all 0.2s ease",
+                  }}
+                  className="group-hover:border-[#d97706] group-hover:scale-[1.02] cursor-pointer"
+                >
+                  <div style={{ width: "72px", height: "72px", borderRadius: "50%", border: "2px solid #d97706", overflow: "hidden", background: "#1c1c1f", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {rank3.avatar ? <img src={rank3.avatar} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span>{rank3.name?.[0] || "U"}</span>}
+                  </div>
+                  <div style={{ color: "#d97706", fontSize: "20px", fontWeight: 800, marginBottom: "4px" }}>🥉 #3</div>
+                  <div style={{ fontSize: "16px", fontWeight: 700, textAlign: "center", marginBottom: "2px" }} className="group-hover:text-[var(--orange)] transition-colors">{rank3.name}</div>
+                  <div style={{ color: "#9ca3af", fontSize: "12px", marginBottom: "16px" }}>{rank3.username}</div>
+                  <div style={{ fontSize: "28px", fontWeight: 800 }}>{rank3.points}</div>
+                  <div style={{ color: "#9ca3af", fontSize: "11px", marginBottom: "8px" }}>Points</div>
+                  <div style={{ color: "#d97706", fontSize: "12px", fontWeight: 600 }}>{rank3.prs} Merged PRs</div>
                 </div>
-                <div style={{ color: "#d97706", fontSize: "20px", fontWeight: 800, marginBottom: "4px" }}>🥉 #3</div>
-                <div style={{ fontSize: "16px", fontWeight: 700, textAlign: "center", marginBottom: "2px" }}>{rank3.name}</div>
-                <div style={{ color: "#9ca3af", fontSize: "12px", marginBottom: "16px" }}>{rank3.username}</div>
-                <div style={{ fontSize: "28px", fontWeight: 800 }}>{rank3.points}</div>
-                <div style={{ color: "#9ca3af", fontSize: "11px", marginBottom: "8px" }}>Points</div>
-                <div style={{ color: "#d97706", fontSize: "12px", fontWeight: 600 }}>{rank3.prs} Merged PRs</div>
-              </div>
+              </Link>
             )}
           </div>
         )}
@@ -276,56 +310,66 @@ export default function LeaderboardUI({
             </div>
           ) : (
             (isSearching ? users : others).map((user) => (
-              <div
+              <Link
                 key={user.id}
-                style={{
-                  background: "rgba(255,255,255,0.02)",
-                  border: "1px solid rgba(255,255,255,0.05)",
-                  borderRadius: "14px",
-                  padding: "16px 20px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  flexWrap: "wrap",
-                  gap: "16px",
-                  transition: "border-color 0.2s",
-                }}
-                className="hover:border-[rgba(255,117,24,0.3)] transition-colors"
+                href={
+                  user.username && !user.username.startsWith("@contributor")
+                    ? `/dashboard?user=${encodeURIComponent(user.username.replace(/^@+/, ""))}`
+                    : `/dashboard?id=${user.id}`
+                }
+                style={{ textDecoration: "none", color: "inherit" }}
+                className="block group"
               >
-                <div style={{ display: "flex", alignItems: "center", gap: "16px", flex: 1, minWidth: "220px" }}>
-                  {/* Rank */}
-                  <div style={{ color: "var(--orange)", fontSize: "16px", fontWeight: 800, width: "36px" }}>
-                    #{user.rank}
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.02)",
+                    border: "1px solid rgba(255,255,255,0.05)",
+                    borderRadius: "14px",
+                    padding: "16px 20px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    flexWrap: "wrap",
+                    gap: "16px",
+                    transition: "all 0.2s ease",
+                  }}
+                  className="group-hover:border-[rgba(255,117,24,0.4)] group-hover:bg-[rgba(255,255,255,0.04)] cursor-pointer"
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "16px", flex: 1, minWidth: "220px" }}>
+                    {/* Rank */}
+                    <div style={{ color: "var(--orange)", fontSize: "16px", fontWeight: 800, width: "36px" }}>
+                      #{user.rank}
+                    </div>
+
+                    {/* Avatar */}
+                    <div style={{ width: "42px", height: "42px", borderRadius: "50%", background: "#1c1c1f", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.1)", overflow: "hidden", flexShrink: 0 }}>
+                      {user.avatar ? (
+                        <img src={user.avatar} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      ) : (
+                        <span style={{ fontSize: "16px" }}>{user.name?.[0] || "U"}</span>
+                      )}
+                    </div>
+
+                    {/* Name & Username */}
+                    <div>
+                      <div style={{ fontSize: "15px", fontWeight: 700 }} className="group-hover:text-[var(--orange)] transition-colors">{user.name}</div>
+                      <div style={{ color: "#9ca3af", fontSize: "12px" }}>{user.username}</div>
+                    </div>
                   </div>
 
-                  {/* Avatar */}
-                  <div style={{ width: "42px", height: "42px", borderRadius: "50%", background: "#1c1c1f", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.1)", overflow: "hidden", flexShrink: 0 }}>
-                    {user.avatar ? (
-                      <img src={user.avatar} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                    ) : (
-                      <span style={{ fontSize: "16px" }}>{user.name?.[0] || "U"}</span>
-                    )}
-                  </div>
-
-                  {/* Name & Username */}
-                  <div>
-                    <div style={{ fontSize: "15px", fontWeight: 700 }}>{user.name}</div>
-                    <div style={{ color: "#9ca3af", fontSize: "12px" }}>{user.username}</div>
+                  {/* Score & PRs */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "28px" }}>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: "18px", fontWeight: 800, color: "var(--orange)" }}>{user.points}</div>
+                      <div style={{ color: "#9ca3af", fontSize: "10px" }}>Points</div>
+                    </div>
+                    <div style={{ textAlign: "right", minWidth: "70px" }}>
+                      <div style={{ fontSize: "14px", fontWeight: 700 }}>{user.prs} PRs</div>
+                      <div style={{ color: "#9ca3af", fontSize: "10px" }}>{user.projects} Repos</div>
+                    </div>
                   </div>
                 </div>
-
-                {/* Score & PRs */}
-                <div style={{ display: "flex", alignItems: "center", gap: "28px" }}>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontSize: "18px", fontWeight: 800, color: "var(--orange)" }}>{user.points}</div>
-                    <div style={{ color: "#9ca3af", fontSize: "10px" }}>Points</div>
-                  </div>
-                  <div style={{ textAlign: "right", minWidth: "70px" }}>
-                    <div style={{ fontSize: "14px", fontWeight: 700 }}>{user.prs} PRs</div>
-                    <div style={{ color: "#9ca3af", fontSize: "10px" }}>{user.projects} Repos</div>
-                  </div>
-                </div>
-              </div>
+              </Link>
             ))
           )}
         </div>

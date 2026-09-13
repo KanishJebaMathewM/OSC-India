@@ -11,185 +11,267 @@ import GitHubLinkCard from "../components/GitHubLinkCard";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardPage() {
+export default async function DashboardPage(props: {
+  searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   const supabase = await createClient();
   const {
-    data: { user },
+    data: { user: currentUser },
     error: userError,
   } = await supabase.auth.getUser();
 
-  if (userError || !user) {
-    if (userError) {
-      console.warn("DashboardPage auth verification notice:", userError.message);
-    }
+  const resolvedParams = props?.searchParams ? await props.searchParams : {};
+  const requestedUser = typeof resolvedParams?.user === "string" ? resolvedParams.user.replace(/^@+/, "").trim() : "";
+  const requestedId = typeof resolvedParams?.id === "string" ? resolvedParams.id.trim() : "";
+
+  // If not logged in and not requesting any profile, redirect to login
+  if (!currentUser && !requestedUser && !requestedId) {
     redirect("/sign-in");
   }
 
   const admin = createAdminClient();
 
-  const metaGithub =
-    user.user_metadata?.user_name ||
-    user.user_metadata?.preferred_username ||
-    null;
+  let targetProfile: Record<string, unknown> | null = null;
+  let isOwnProfile = false;
 
-  // 1. Fetch profile by user_id (foreign key added in migration 0003)
-  let { data: profile } = await admin
-    .from("profiles")
-    .select("*")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  // 2. If not found by user_id, fallback to id (PK, original auth.users ref from migration 0001).
-  //    The handle_new_user() trigger sets id = auth.users.id but NOT user_id,
-  //    so profiles created after migration 0003 have user_id = NULL.
-  if (!profile) {
+  // 1. If a specific user / id was requested in the URL
+  if (requestedId) {
     const { data: byId } = await admin
       .from("profiles")
       .select("*")
-      .eq("id", user.id)
+      .or(`user_id.eq.${requestedId},id.eq.${requestedId}`)
       .maybeSingle();
-    if (byId) {
-      profile = byId;
-      // Backfill user_id so future lookups work directly
-      try {
-        await admin
-          .from("profiles")
-          .update({ user_id: user.id, updated_at: new Date().toISOString() })
-          .eq("id", user.id);
-      } catch {
-        // Non-blocking backfill
-      }
-    }
+    targetProfile = byId as Record<string, unknown> | null;
   }
 
-  // 3. If still not found, fallback search by GitHub username
-  if (!profile && metaGithub) {
+  if (!targetProfile && requestedUser) {
+    // Try matching github handle first
     const { data: byGithub } = await admin
       .from("profiles")
       .select("*")
-      .ilike("github", metaGithub)
+      .ilike("github", requestedUser)
       .maybeSingle();
-    if (byGithub) {
-      profile = byGithub;
-      // Backfill user_id so future lookups work directly
+    targetProfile = byGithub as Record<string, unknown> | null;
+
+    // Fallback: try user_id / id in case a raw ID was passed as user param
+    if (!targetProfile) {
+      const { data: byId } = await admin
+        .from("profiles")
+        .select("*")
+        .or(`user_id.eq.${requestedUser},id.eq.${requestedUser}`)
+        .maybeSingle();
+      targetProfile = byId as Record<string, unknown> | null;
+    }
+
+    // Fallback: try full_name
+    if (!targetProfile) {
+      const { data: byName } = await admin
+        .from("profiles")
+        .select("*")
+        .ilike("full_name", requestedUser)
+        .maybeSingle();
+      targetProfile = byName as Record<string, unknown> | null;
+    }
+  }
+
+  // 2. Determine if viewing own profile or requested user's profile
+  let profile: Record<string, unknown> | null = targetProfile;
+  let targetUserId = "";
+
+  if (targetProfile) {
+    targetUserId = String(targetProfile.user_id || targetProfile.id);
+    isOwnProfile = Boolean(currentUser && (currentUser.id === targetProfile.user_id || currentUser.id === targetProfile.id));
+  } else if (currentUser) {
+    // Viewing own profile
+    isOwnProfile = true;
+    targetUserId = currentUser.id;
+
+    const metaGithub =
+      currentUser.user_metadata?.user_name ||
+      currentUser.user_metadata?.preferred_username ||
+      null;
+
+    // Fetch own profile
+    let { data: ownProfile } = await admin
+      .from("profiles")
+      .select("*")
+      .eq("user_id", currentUser.id)
+      .maybeSingle();
+
+    if (!ownProfile) {
+      const { data: byId } = await admin
+        .from("profiles")
+        .select("*")
+        .eq("id", currentUser.id)
+        .maybeSingle();
+      if (byId) {
+        ownProfile = byId;
+        try {
+          await admin
+            .from("profiles")
+            .update({ user_id: currentUser.id, updated_at: new Date().toISOString() })
+            .eq("id", currentUser.id);
+        } catch {
+          // Non-blocking backfill
+        }
+      }
+    }
+
+    if (!ownProfile && metaGithub) {
+      const { data: byGithub } = await admin
+        .from("profiles")
+        .select("*")
+        .ilike("github", metaGithub)
+        .maybeSingle();
+      if (byGithub) {
+        ownProfile = byGithub;
+        try {
+          await admin
+            .from("profiles")
+            .update({ user_id: currentUser.id, updated_at: new Date().toISOString() })
+            .eq("id", byGithub.id);
+        } catch {
+          // Non-blocking backfill
+        }
+      }
+    }
+
+    // Auto-provision if missing
+    if (!ownProfile) {
+      const existingRole = currentUser.user_metadata?.role || "contributor";
+      const fName = currentUser.user_metadata?.full_name || currentUser.user_metadata?.name || "Contributor";
+      const av = currentUser.user_metadata?.avatar_url || currentUser.user_metadata?.picture || null;
       try {
+        const { data: created } = await admin
+          .from("profiles")
+          .upsert(
+            {
+              user_id: currentUser.id,
+              full_name: fName,
+              avatar_url: av,
+              github: metaGithub,
+              role: existingRole,
+              score: 0,
+              merged_prs: 0,
+              projects_count: 0,
+              badges_created: 0,
+              tech_stack: [],
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "user_id" }
+          )
+          .select("*")
+          .maybeSingle();
+        if (created) ownProfile = created;
+      } catch (err: unknown) {
+        console.warn("Profile auto-provision error:", err instanceof Error ? err.message : "Profile error");
+      }
+    } else if (!ownProfile.github && metaGithub) {
+      try {
+        const updateCol = ownProfile.user_id ? "user_id" : "id";
+        const updateVal = ownProfile.user_id || ownProfile.id;
         await admin
           .from("profiles")
-          .update({ user_id: user.id, updated_at: new Date().toISOString() })
-          .eq("id", byGithub.id);
-      } catch {
-        // Non-blocking backfill
+          .update({ github: metaGithub, updated_at: new Date().toISOString() })
+          .eq(updateCol, updateVal);
+        ownProfile.github = metaGithub;
+      } catch (err: unknown) {
+        console.warn("Profile github sync warning:", err instanceof Error ? err.message : "GitHub sync error");
       }
     }
+
+    profile = ownProfile as Record<string, unknown> | null;
+  } else {
+    // Requested user not found and not logged in
+    redirect("/leaderboard");
   }
 
-  const fullName = profile?.full_name || user.user_metadata?.full_name || user.user_metadata?.name || "Contributor";
-  const avatar = profile?.avatar_url || user.user_metadata?.avatar_url || user.user_metadata?.picture || null;
-  const githubUsername =
-    profile?.github ||
-    metaGithub ||
-    null;
+  const fullName = (profile?.full_name as string) || (isOwnProfile ? currentUser?.user_metadata?.full_name || currentUser?.user_metadata?.name : "Contributor") || "Contributor";
+  const avatar = (profile?.avatar_url as string) || (isOwnProfile ? currentUser?.user_metadata?.avatar_url || currentUser?.user_metadata?.picture : null) || null;
+  const githubUsername = (profile?.github as string) || (isOwnProfile ? currentUser?.user_metadata?.user_name || currentUser?.user_metadata?.preferred_username : null) || null;
+  const rawRole = (profile?.role as string) || (isOwnProfile ? currentUser?.user_metadata?.role : "contributor") || "contributor";
+  const roleName = rawRole.charAt(0).toUpperCase() + rawRole.slice(1);
+  const username = githubUsername || (isOwnProfile ? currentUser?.email?.split("@")[0] : null) || "user";
+  const totalPoints = Number(profile?.score ?? 0);
+  const mergedPRs = Number(profile?.merged_prs ?? 0);
+  const projectsCount = Number(profile?.projects_count ?? 0);
+  const badgesCreated = Number(profile?.badges_created ?? 0);
 
-  // Auto-provision profile ONLY if genuinely missing from database.
-  // Preserve existing role from auth metadata — never overwrite a project-admin/mentor/admin back to contributor.
-  if (!profile) {
-    const existingRole = user.user_metadata?.role || "contributor";
-    try {
-      const { data: created, error: upsertErr } = await admin
-        .from("profiles")
-        .upsert(
-          {
-            user_id: user.id,
-            full_name: fullName,
-            avatar_url: avatar,
-            github: githubUsername,
-            role: existingRole,
-            score: 0,
-            merged_prs: 0,
-            projects_count: 0,
-            badges_created: 0,
-            tech_stack: [],
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "user_id" }
-        )
-        .select("*")
-        .maybeSingle();
-      if (upsertErr) {
-        console.warn("Profile auto-provision warning:", upsertErr.message);
-      } else if (created) {
-        profile = created;
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Profile error";
-      console.warn("Profile auto-provision error:", msg);
-    }
-  } else if (!profile.github && metaGithub) {
-    try {
-      const updateCol = profile.user_id ? "user_id" : "id";
-      const updateVal = profile.user_id || profile.id;
-      await admin
-        .from("profiles")
-        .update({ github: metaGithub, updated_at: new Date().toISOString() })
-        .eq(updateCol, updateVal);
-      profile.github = metaGithub;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "GitHub sync error";
-      console.warn("Profile github sync warning:", msg);
-    }
-  }
-
-  // Fetch individual verified contributions from public.contributions joined with projects
+  // Fetch verified contributions
+  const queryUserId = String(profile?.user_id || profile?.id || targetUserId);
+  const profileId = String(profile?.id || queryUserId);
   const { data: userContributions } = await admin
     .from("contributions")
     .select("id, type, github_url, status, points_awarded, contributed_at, projects(id, name, github_repo_url)")
-    .eq("user_id", user.id)
+    .or(`user_id.eq.${queryUserId},user_id.eq.${profileId}`)
     .order("contributed_at", { ascending: false });
 
-  const userMeta = user.user_metadata || {};
-  const isOwner = (user.email || "").toLowerCase() === (process.env.ADMIN_PORTAL_EMAIL || "sayanghosh1887@gmail.com").toLowerCase();
-  const rawRole = profile?.role || userMeta.role || (isOwner ? "admin" : "contributor");
-  const roleName = rawRole.charAt(0).toUpperCase() + rawRole.slice(1);
-  const username = githubUsername || user.email?.split("@")[0] || "user";
-  const totalPoints = profile?.score ?? userMeta.score ?? 0;
-  const mergedPRs = profile?.merged_prs ?? userMeta.merged_prs ?? 0;
-  const projectsCount = profile?.projects_count ?? userMeta.projects_count ?? 0;
-  const badgesCreated = profile?.badges_created ?? userMeta.badges_created ?? 0;
-  const isSuperAdmin = Boolean(profile?.is_admin || userMeta.is_admin || isOwner || rawRole === "admin");
-
-  const profilePayload = {
-    id: user.id,
-    name: fullName,
-    email: user.email,
-    avatar: avatar,
-    role: rawRole,
-    isAdmin: isSuperAdmin,
-    github: githubUsername,
-  };
+  // Viewer profile payload for navbar
+  let viewerProfilePayload = null;
+  if (currentUser) {
+    const isOwner = (currentUser.email || "").toLowerCase() === (process.env.ADMIN_PORTAL_EMAIL || "sayanghosh1887@gmail.com").toLowerCase();
+    viewerProfilePayload = {
+      id: currentUser.id,
+      name: currentUser.user_metadata?.full_name || currentUser.user_metadata?.name || currentUser.email?.split("@")[0] || "Contributor",
+      email: currentUser.email,
+      avatar: currentUser.user_metadata?.avatar_url || currentUser.user_metadata?.picture || null,
+      role: currentUser.user_metadata?.role || (isOwner ? "admin" : "contributor"),
+      isAdmin: Boolean(currentUser.user_metadata?.is_admin || isOwner || currentUser.user_metadata?.role === "admin"),
+      github: currentUser.user_metadata?.github || currentUser.user_metadata?.user_name || null,
+    };
+  }
 
   return (
     <div className="min-h-screen bg-[var(--bg)] flex flex-col font-sans text-white">
-      <Navbar initialProfile={profilePayload} />
+      <Navbar initialProfile={viewerProfilePayload} />
       <div style={{ height: "96px", width: "100%", flexShrink: 0 }} aria-hidden="true" />
 
       <main className="flex-grow flex flex-col items-center" style={{ margin: "0 auto", maxWidth: "1440px", width: "100%", paddingBottom: "96px", paddingTop: "24px", paddingLeft: "clamp(20px, 5vw, 64px)", paddingRight: "clamp(20px, 5vw, 64px)", overflowX: "hidden", boxSizing: "border-box" }}>
         
+        {/* Back Link if viewing someone else's profile */}
+        {!isOwnProfile && (
+          <div style={{ width: "100%", marginBottom: "16px" }}>
+            <Link
+              href="/leaderboard"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+                color: "var(--orange)",
+                textDecoration: "none",
+                fontSize: "14px",
+                fontWeight: 600,
+                padding: "8px 16px",
+                background: "rgba(255,117,24,0.08)",
+                borderRadius: "10px",
+                border: "1px solid rgba(255,117,24,0.2)",
+                transition: "all 0.2s ease",
+              }}
+              className="hover:bg-[rgba(255,117,24,0.15)] hover:border-[rgba(255,117,24,0.4)]"
+            >
+              ← Back to Leaderboard
+            </Link>
+          </div>
+        )}
+
         {/* Header */}
         <div style={{ width: "100%", marginBottom: "40px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "16px" }}>
           <div>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", background: "rgba(255,96,0,0.1)", color: "var(--orange)", padding: "4px 12px", borderRadius: "16px", fontSize: "12px", fontWeight: 600, marginBottom: "20px" }}>
-              
-              
-            </div>
-            <h1 style={{ fontSize: "clamp(32px, 8vw, 40px)", fontWeight: 800, marginBottom: "8px", letterSpacing: "-0.02em" }}>Dashboard</h1>
-            <p style={{ color: "#9ca3af", fontSize: "15px" }}>Your open source journey, verified scores, and active badges.</p>
+            <h1 style={{ fontSize: "clamp(32px, 8vw, 40px)", fontWeight: 800, marginBottom: "8px", letterSpacing: "-0.02em" }}>
+              {isOwnProfile ? "Dashboard" : `${fullName}'s Profile`}
+            </h1>
+            <p style={{ color: "#9ca3af", fontSize: "15px" }}>
+              {isOwnProfile
+                ? "Your open source journey, verified scores, and active badges."
+                : `Verified open source journey, merit points, and contributions for @${username}.`}
+            </p>
           </div>
         </div>
 
-        {/* GitHub Link Banner (shown when GitHub not connected) */}
-        {!githubUsername && (
+        {/* GitHub Link Banner (shown only on own profile when GitHub not connected) */}
+        {isOwnProfile && !githubUsername && currentUser && (
           <div style={{ width: "100%", marginBottom: "24px" }}>
-            <GitHubLinkCard userId={user.id} />
+            <GitHubLinkCard userId={currentUser.id} />
           </div>
         )}
 
@@ -277,7 +359,7 @@ export default async function DashboardPage() {
                 <div style={{ display: "flex", gap: "8px" }}>
                   <Link href="/badge" style={{ flex: 1, textDecoration: "none" }}>
                     <button style={{ width: "100%", background: "var(--orange)", color: "white", padding: "10px", borderRadius: "8px", fontSize: "13px", fontWeight: 600, transition: "all 0.2s", cursor: "pointer", border: "none" }}>
-                      Customize Badge
+                      {isOwnProfile ? "Customize Badge" : "View OSCG Badges"}
                     </button>
                   </Link>
                 </div>
@@ -326,7 +408,7 @@ export default async function DashboardPage() {
 
             {/* Tech Stack */}
             <div style={{ display: "flex", gap: "24px", flexWrap: "wrap" }}>
-              <TechStack initialStack={profile?.tech_stack || []} providerAccountId={githubUsername} />
+              <TechStack initialStack={Array.isArray(profile?.tech_stack) ? (profile.tech_stack as string[]) : []} providerAccountId={githubUsername} isReadOnly={!isOwnProfile} />
             </div>
           </div>
         </div>
@@ -345,7 +427,7 @@ export default async function DashboardPage() {
         </div>
 
         <div style={{ width: "100%", background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: "24px", padding: "clamp(16px, 4vw, 32px)", marginBottom: "48px", overflowX: "auto" }}>
-          <ActivityMatrix providerAccountId={githubUsername} />
+          <ActivityMatrix providerAccountId={githubUsername} isReadOnly={!isOwnProfile} />
         </div>
 
         {/* Section Divider */}
