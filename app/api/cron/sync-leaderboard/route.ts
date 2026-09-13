@@ -86,7 +86,6 @@ export async function GET(request: Request) {
       score: number;
       merged_prs: number;
       projects_count: number;
-      updated_at: string;
     }> = [];
 
     const leaderboardStats: Array<{
@@ -103,7 +102,6 @@ export async function GET(request: Request) {
         score: agg.score,
         merged_prs: agg.merged_prs,
         projects_count: agg.projects.size,
-        updated_at: nowIso,
       });
 
       leaderboardStats.push({
@@ -114,10 +112,16 @@ export async function GET(request: Request) {
       });
     }
 
-    // Chunked batch upserts (500 rows per batch)
-    for (let i = 0; i < profileUpdates.length; i += 500) {
-      const chunk = profileUpdates.slice(i, i + 500);
-      await admin.from("profiles").upsert(chunk, { onConflict: "id" });
+    // Direct profile updates
+    for (const pUp of profileUpdates) {
+      await admin
+        .from("profiles")
+        .update({
+          score: pUp.score,
+          merged_prs: pUp.merged_prs,
+          projects_count: pUp.projects_count,
+        })
+        .or(`id.eq.${pUp.id},user_id.eq.${pUp.user_id}`);
     }
 
     for (let i = 0; i < leaderboardStats.length; i += 500) {

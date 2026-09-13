@@ -276,7 +276,6 @@ export async function syncGitHubContribution(
             score: mergerScore,
             merged_prs: 0,
             projects_count: contributedRepos.size,
-            updated_at: new Date().toISOString(),
           })
           .eq(updateCol, userId);
       } catch {}
@@ -522,9 +521,8 @@ export async function syncGitHubContribution(
           score: totalScore,
           merged_prs: mergedPrsCount,
           projects_count: projectsCount,
-          updated_at: new Date().toISOString(),
         })
-        .eq("user_id", userId);
+        .or(`id.eq.${userId},user_id.eq.${userId}`);
     } catch (dbErr) {
       console.warn("Notice: profile update after GitHub sync:", dbErr);
     }
@@ -766,12 +764,12 @@ export async function syncAllProjectsAndContributors() {
           const rawAuthor = pr.user?.login;
           if (!rawAuthor) continue;
 
-          // Only count PRs that carry the official competition label
+          // Only count PRs that carry the official competition label OSCI'26 / OSCI26
           const hasOsciLabel = Array.isArray(pr.labels) &&
-            pr.labels.some((l: { name: string }) => l.name.toLowerCase() === "osci'26");
+            pr.labels.some((l: { name: string }) => /osci[- ']?26|osci[- ']?2026/i.test(l.name));
           if (!hasOsciLabel) continue;
 
-          // Detect difficulty
+          // Detect difficulty from labels, titles & body
           let prDifficulty = detectDifficulty({
             title: pr.title,
             body: pr.body,
@@ -808,6 +806,33 @@ export async function syncAllProjectsAndContributors() {
                 prDifficulty = issueDifficulty;
               }
             }
+          }
+
+          // Fetch PR additions + deletions if available to refine difficulty by code changes
+          let additions = (pr as { additions?: number }).additions;
+          let deletions = (pr as { deletions?: number }).deletions;
+          if (additions === undefined || deletions === undefined) {
+            try {
+              const detailRes = await fetch(`https://api.github.com/repos/${repoSlug}/pulls/${pr.number}`, { headers, next: { revalidate: 0 } });
+              if (detailRes.ok) {
+                const detail = await detailRes.json();
+                additions = detail.additions || 0;
+                deletions = detail.deletions || 0;
+              }
+            } catch {
+              additions = 0;
+              deletions = 0;
+            }
+          }
+
+          const totalLines = (additions || 0) + (deletions || 0);
+          let diffBasedDifficulty: DifficultyLevel = "easy";
+          if (totalLines >= 800) diffBasedDifficulty = "expert";
+          else if (totalLines >= 250) diffBasedDifficulty = "hard";
+          else if (totalLines >= 50) diffBasedDifficulty = "medium";
+
+          if (DIFFICULTY_RANK[diffBasedDifficulty] > DIFFICULTY_RANK[prDifficulty]) {
+            prDifficulty = diffBasedDifficulty;
           }
 
           const prMergedAt = pr.merged_at || pr.closed_at || new Date().toISOString();
@@ -856,7 +881,6 @@ export async function syncAllProjectsAndContributors() {
     score: number;
     merged_prs: number;
     projects_count: number;
-    updated_at: string;
   }
 
   const allContribRows: ContribRow[] = [];
@@ -864,8 +888,29 @@ export async function syncAllProjectsAndContributors() {
   const allProfileUpdates: ProfileUpsertRow[] = [];
   const authMetadataQueue: Array<{ userId: string; meta: Record<string, unknown> }> = [];
 
-  // 6. Aggregate each contributor across auth.users and compute points
+  // Merge auth.users and public.profiles so every registered contributor in the DB is processed
+  const candidateUsersMap = new Map<string, SyncAuthUser>();
   for (const user of authUsers) {
+    candidateUsersMap.set(user.id, user);
+  }
+  for (const prof of dbProfiles || []) {
+    const effectiveId = prof.user_id || prof.id;
+    if (effectiveId && !candidateUsersMap.has(effectiveId)) {
+      candidateUsersMap.set(effectiveId, {
+        id: effectiveId,
+        email: prof.email || undefined,
+        user_metadata: {
+          github: prof.github || undefined,
+          role: prof.role || "contributor",
+          is_admin: prof.is_admin || false,
+        },
+      });
+    }
+  }
+  const allCandidateUsers = Array.from(candidateUsersMap.values());
+
+  // 6. Aggregate each contributor and compute points
+  for (const user of allCandidateUsers) {
     const meta = user.user_metadata || {};
     const prof = profileMap.get(user.id);
     const identities = user.identities || [];
@@ -924,9 +969,10 @@ export async function syncAllProjectsAndContributors() {
     if (userPrs.length > 0) {
       for (const p of userPrs) {
         const projId = projectMap.get(p.repoSlug);
+        const targetUserId = prof?.user_id || user.id;
         if (projId && p.htmlUrl) {
           allContribRows.push({
-            user_id: user.id,
+            user_id: targetUserId,
             project_id: projId,
             type: "pr",
             github_url: p.htmlUrl,
@@ -937,8 +983,9 @@ export async function syncAllProjectsAndContributors() {
         }
       }
 
+      const targetUserId = prof?.user_id || user.id;
       allLeaderboardStats.push({
-        user_id: user.id,
+        user_id: targetUserId,
         total_points: computedScore,
         current_streak: 1,
         updated_at: nowIso,
@@ -948,13 +995,12 @@ export async function syncAllProjectsAndContributors() {
     // Queue profile and auth metadata update if values changed or has score
     if (hasChanged || computedScore > 0) {
       allProfileUpdates.push({
-        id: user.id,
-        user_id: user.id,
+        id: prof?.id || user.id,
+        user_id: prof?.user_id || user.id,
         github: primaryHandle,
         score: computedScore,
         merged_prs: computedMergedPrs,
         projects_count: computedProjects,
-        updated_at: nowIso,
       });
 
       authMetadataQueue.push({
@@ -973,7 +1019,7 @@ export async function syncAllProjectsAndContributors() {
   }
 
   // 7. Project-admin pass: award MERGER_POINTS for each OSCI'26-labelled PR in their repository or merged by them
-  for (const user of authUsers) {
+  for (const user of allCandidateUsers) {
     const meta = user.user_metadata || {};
     const prof = profileMap.get(user.id);
     const identities = user.identities || [];
@@ -1024,12 +1070,14 @@ export async function syncAllProjectsAndContributors() {
     const primaryHandle = prof?.github || meta.github || meta.user_name || Array.from(userHandles)[0] || null;
     const adminProjects = new Set(userMergePrs.map((m) => m.repoSlug));
 
+    const targetAdminUserId = prof?.user_id || user.id;
+
     // Store each merged PR as a "pr_merge" contribution row
     for (const m of userMergePrs) {
       const projId = projectMap.get(m.repoSlug);
       if (projId && m.htmlUrl) {
         allContribRows.push({
-          user_id: user.id,
+          user_id: targetAdminUserId,
           project_id: projId,
           type: "pr_merge",
           // Unique key: prefix URL so it doesn't collide with the contributor's "pr" row
@@ -1042,20 +1090,19 @@ export async function syncAllProjectsAndContributors() {
     }
 
     allLeaderboardStats.push({
-      user_id: user.id,
+      user_id: targetAdminUserId,
       total_points: mergerScore,
       current_streak: 1,
       updated_at: nowIso,
     });
 
     allProfileUpdates.push({
-      id: user.id,
-      user_id: user.id,
+      id: prof?.id || user.id,
+      user_id: targetAdminUserId,
       github: primaryHandle,
       score: mergerScore,
-      merged_prs: 0, // project-admins don't author PRs
+      merged_prs: userMergePrs.length,
       projects_count: adminProjects.size,
-      updated_at: nowIso,
     });
 
     authMetadataQueue.push({
@@ -1064,7 +1111,7 @@ export async function syncAllProjectsAndContributors() {
         ...meta,
         github: primaryHandle,
         score: mergerScore,
-        merged_prs: 0,
+        merged_prs: userMergePrs.length,
         projects_count: adminProjects.size,
       },
     });
@@ -1072,7 +1119,7 @@ export async function syncAllProjectsAndContributors() {
     updatedCount++;
   }
 
-  // 8. Perform scalable chunked upserts (500 rows per batch) to eliminate round-trip overhead
+  // 8. Perform scalable chunked upserts for contributions & leaderboard_stats
   async function chunkedBatchUpsert(
     table: string,
     rows: unknown[],
@@ -1082,7 +1129,10 @@ export async function syncAllProjectsAndContributors() {
     for (let i = 0; i < rows.length; i += chunkSize) {
       const chunk = rows.slice(i, i + chunkSize);
       try {
-        await admin.from(table).upsert(chunk as never, { onConflict });
+        const { error: upsertErr } = await admin.from(table).upsert(chunk as never, { onConflict });
+        if (upsertErr) {
+          console.warn(`Notice: chunked upsert on ${table} error:`, upsertErr.message);
+        }
       } catch (err: unknown) {
         console.warn(`Notice: chunked upsert on ${table} failed:`, err instanceof Error ? err.message : "Unknown error");
       }
@@ -1097,8 +1147,28 @@ export async function syncAllProjectsAndContributors() {
     await chunkedBatchUpsert("leaderboard_stats", allLeaderboardStats, "user_id", 500);
   }
 
+  // Directly update profiles in public.profiles by id / user_id
   if (allProfileUpdates.length > 0) {
-    await chunkedBatchUpsert("profiles", allProfileUpdates, "id", 500);
+    for (const pUp of allProfileUpdates) {
+      const updateData: Record<string, unknown> = {
+        score: pUp.score,
+        merged_prs: pUp.merged_prs,
+        projects_count: pUp.projects_count,
+      };
+      if (pUp.github) updateData.github = pUp.github;
+
+      try {
+        const { error: pErr } = await admin
+          .from("profiles")
+          .update(updateData)
+          .or(`id.eq.${pUp.id},user_id.eq.${pUp.user_id}`);
+        if (pErr) {
+          console.warn(`Notice: profile update for ${pUp.id} error:`, pErr.message);
+        }
+      } catch (err: unknown) {
+        console.warn(`Notice: profile update for ${pUp.id} failed:`, err instanceof Error ? err.message : "Unknown error");
+      }
+    }
   }
 
   // Best-effort non-blocking metadata sync for top 50 changed contributors to stay within function timeout

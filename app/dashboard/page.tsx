@@ -200,11 +200,57 @@ export default async function DashboardPage(props: {
   // Fetch verified contributions
   const queryUserId = String(profile?.user_id || profile?.id || targetUserId);
   const profileId = String(profile?.id || queryUserId);
-  const { data: userContributions } = await admin
-    .from("contributions")
-    .select("id, type, github_url, status, points_awarded, contributed_at, projects(id, name, github_repo_url)")
-    .or(`user_id.eq.${queryUserId},user_id.eq.${profileId}`)
-    .order("contributed_at", { ascending: false });
+  const cleanAdminHandle = (githubUsername || (profile?.github as string) || "").replace(/^@+/, "").toLowerCase().trim();
+
+  let userContributions: Array<{
+    id: string;
+    type?: string;
+    github_url: string;
+    status?: string;
+    points_awarded?: number;
+    contributed_at?: string;
+    projects?: { id?: string; name?: string; github_repo_url?: string } | Array<{ id?: string; name?: string; github_repo_url?: string }> | null;
+  }> | null = null;
+
+  if (rawRole === "project-admin" && cleanAdminHandle) {
+    // 1. Find all repositories owned by this project admin
+    const { data: adminProjects } = await admin
+      .from("projects")
+      .select("id, name, github_repo_url");
+    
+    const managedProjectIds: string[] = [];
+    for (const p of adminProjects || []) {
+      const url = p.github_repo_url || "";
+      const owner = url.replace(/^https?:\/\/github\.com\//i, "").split("/")[0].toLowerCase().trim();
+      if (owner === cleanAdminHandle) {
+        managedProjectIds.push(p.id);
+      }
+    }
+
+    if (managedProjectIds.length > 0) {
+      const { data: adminContribs } = await admin
+        .from("contributions")
+        .select("id, type, github_url, status, points_awarded, contributed_at, projects(id, name, github_repo_url)")
+        .in("project_id", managedProjectIds)
+        .order("contributed_at", { ascending: false });
+      userContributions = adminContribs as typeof userContributions;
+    } else {
+      const { data: fallbackContribs } = await admin
+        .from("contributions")
+        .select("id, type, github_url, status, points_awarded, contributed_at, projects(id, name, github_repo_url)")
+        .or(`user_id.eq.${queryUserId},user_id.eq.${profileId}`)
+        .order("contributed_at", { ascending: false });
+      userContributions = fallbackContribs as typeof userContributions;
+    }
+  } else {
+    // Regular contributor: query PRs authored by this user
+    const { data: contribs } = await admin
+      .from("contributions")
+      .select("id, type, github_url, status, points_awarded, contributed_at, projects(id, name, github_repo_url)")
+      .or(`user_id.eq.${queryUserId},user_id.eq.${profileId}`)
+      .order("contributed_at", { ascending: false });
+    userContributions = contribs as typeof userContributions;
+  }
 
   // Viewer profile payload for navbar
   let viewerProfilePayload = null;
@@ -440,8 +486,14 @@ export default async function DashboardPage(props: {
         {/* Verified PRs Section */}
         <div style={{ width: "100%", marginBottom: "24px", display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: "12px" }}>
           <div>
-            <h2 style={{ fontSize: "24px", fontWeight: 700, marginBottom: "8px" }}>Verified PR Contributions</h2>
-            <p style={{ color: "#9ca3af", fontSize: "14px" }}>Merged pull requests tracked across official competition repositories</p>
+            <h2 style={{ fontSize: "24px", fontWeight: 700, marginBottom: "8px" }}>
+              {rawRole === "project-admin" ? "Managed Repository PRs (OSCI'26)" : "Verified PR Contributions"}
+            </h2>
+            <p style={{ color: "#9ca3af", fontSize: "14px" }}>
+              {rawRole === "project-admin"
+                ? "All merged pull requests with the official OSCI'26 label in your managed repository"
+                : "Merged pull requests tracked across official competition repositories"}
+            </p>
           </div>
           <span style={{ fontSize: "12px", background: "rgba(255,117,24,0.1)", color: "var(--orange)", padding: "4px 12px", borderRadius: "12px", fontWeight: 600, border: "1px solid rgba(255,117,24,0.2)" }}>
             {userContributions?.length || 0} Merged PRs
