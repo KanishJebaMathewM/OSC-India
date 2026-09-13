@@ -93,33 +93,43 @@ export async function syncGitHubContribution(
     return { success: false, error: "Invalid GitHub username provided." };
   }
 
-  // 2. Check Role & Admin status safely - early exit if not a contributor
+  // 2. Check Role & Admin status safely
   let userRole = "contributor";
   let isAdmin = false;
 
   const { data: userProfile } = await admin
     .from("profiles")
-    .select("role, github")
+    .select("id, user_id, role, github")
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (userProfile) {
-    userRole = userProfile.role || "contributor";
-    isAdmin = Boolean(userRole === "admin" || userRole === "project-admin");
+  if (userProfile?.role) {
+    userRole = userProfile.role;
+    isAdmin = userRole === "admin";
   } else {
-    try {
-      const { data: authUser } = await admin.auth.admin.getUserById(userId);
-      if (authUser?.user?.user_metadata) {
-        userRole = authUser.user.user_metadata.role || "contributor";
-        isAdmin = Boolean(authUser.user.user_metadata.is_admin || userRole === "admin");
+    const { data: byId } = await admin
+      .from("profiles")
+      .select("id, user_id, role, github")
+      .eq("id", userId)
+      .maybeSingle();
+    if (byId?.role) {
+      userRole = byId.role;
+      isAdmin = userRole === "admin";
+    } else {
+      try {
+        const { data: authUser } = await admin.auth.admin.getUserById(userId);
+        if (authUser?.user?.user_metadata) {
+          userRole = authUser.user.user_metadata.role || "contributor";
+          isAdmin = Boolean(authUser.user.user_metadata.is_admin || userRole === "admin");
+        }
+      } catch {
+        // fallback
       }
-    } catch {
-      // fallback
     }
   }
 
-  // Only contributors participate in scoring. Skip admins/mentors to conserve API quota.
-  if (userRole !== "contributor" || isAdmin) {
+  // Super admins and mentors do not participate in leaderboard scoring
+  if (userRole === "admin" || userRole === "mentor" || isAdmin) {
     return {
       success: true,
       skipped: true,
@@ -136,6 +146,155 @@ export async function syncGitHubContribution(
 
   // 4. Setup GitHub API headers with OAuth fallback for 5,000 req/hr
   const headers = getGitHubAuthHeaders();
+
+  // Special branch: If user is project-admin, award points for all merged OSCI'26 PRs in their project repo(s)
+  if (userRole === "project-admin") {
+    try {
+      const lowerHandle = handle.toLowerCase();
+      // Identify repositories owned/managed by this project admin
+      const adminRepoSlugs = Array.from(allowedSlugs).filter((slug) =>
+        slug.split("/")[0].toLowerCase() === lowerHandle
+      );
+
+      // If no direct repo owner match, include all allowed repos to check for PRs merged by this admin
+      const targetRepos = adminRepoSlugs.length > 0 ? adminRepoSlugs : Array.from(allowedSlugs);
+
+      const validMergePRs: Array<{
+        repoSlug: string;
+        prNumber: number;
+        htmlUrl: string;
+        mergedAt: string;
+      }> = [];
+      const seenPrKeys = new Set<string>();
+
+      for (const repoSlug of targetRepos) {
+        const isOwner = repoSlug.split("/")[0].toLowerCase() === lowerHandle;
+        let page = 1;
+        while (page <= 5) {
+          const url = `https://api.github.com/repos/${repoSlug}/pulls?state=closed&per_page=100&page=${page}&sort=updated&direction=desc`;
+          const res = await fetch(url, { headers, next: { revalidate: 0 } });
+          if (!res.ok) break;
+
+          const pulls = await res.json();
+          if (!Array.isArray(pulls) || pulls.length === 0) break;
+
+          for (const pr of pulls) {
+            if (!pr.merged_at) continue;
+
+            const hasOsciLabel =
+              Array.isArray(pr.labels) &&
+              pr.labels.some((l: { name: string }) => l.name.toLowerCase() === "osci'26");
+            if (!hasOsciLabel) continue;
+
+            const rawMerger = (pr.merged_by?.login || "").toLowerCase();
+            const isMergedByThisAdmin = rawMerger === lowerHandle;
+
+            // Project admin gets points if they own the repo OR if they merged the PR
+            if (isOwner || isMergedByThisAdmin) {
+              const key = `${repoSlug}#${pr.number}`;
+              if (!seenPrKeys.has(key)) {
+                seenPrKeys.add(key);
+                validMergePRs.push({
+                  repoSlug,
+                  prNumber: pr.number,
+                  htmlUrl: pr.html_url,
+                  mergedAt: pr.merged_at || pr.closed_at || new Date().toISOString(),
+                });
+              }
+            }
+          }
+
+          if (pulls.length < 100) break;
+          page++;
+        }
+      }
+
+      const mergerScore = validMergePRs.length * MERGER_POINTS;
+      const contributedRepos = new Set(validMergePRs.map((p) => p.repoSlug));
+
+      // Fetch projects to map repoSlug -> project_id
+      const { data: dbProjects } = await admin.from("projects").select("id, github_repo_url");
+      const projectMap = new Map<string, string>();
+      for (const p of dbProjects || []) {
+        const slug = p.github_repo_url.replace(/^https?:\/\/github\.com\//i, "").replace(/\/+$/, "").toLowerCase();
+        projectMap.set(slug, p.id);
+      }
+
+      const contributionsToUpsert = [];
+      for (const pr of validMergePRs) {
+        const projectId = projectMap.get(pr.repoSlug);
+        if (projectId) {
+          contributionsToUpsert.push({
+            user_id: userId,
+            project_id: projectId,
+            type: "pr_merge",
+            github_url: `merged:${pr.htmlUrl}`,
+            status: "merged",
+            points_awarded: MERGER_POINTS,
+            contributed_at: pr.mergedAt,
+          });
+        }
+      }
+
+      if (contributionsToUpsert.length > 0) {
+        await admin.from("contributions").upsert(contributionsToUpsert, { onConflict: "github_url" });
+      }
+
+      await admin.from("leaderboard_stats").upsert(
+        {
+          user_id: userId,
+          total_points: mergerScore,
+          current_streak: 1,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" }
+      );
+
+      // Update auth user metadata
+      try {
+        const { data: userData } = await admin.auth.admin.getUserById(userId);
+        if (userData?.user) {
+          await admin.auth.admin.updateUserById(userId, {
+            user_metadata: {
+              ...userData.user.user_metadata,
+              github: handle,
+              score: mergerScore,
+              merged_prs: 0,
+              projects_count: contributedRepos.size,
+            },
+          });
+        }
+      } catch {}
+
+      // Update profiles table
+      try {
+        const updateCol = userProfile?.user_id ? "user_id" : "id";
+        await admin
+          .from("profiles")
+          .update({
+            github: handle,
+            score: mergerScore,
+            merged_prs: 0,
+            projects_count: contributedRepos.size,
+            updated_at: new Date().toISOString(),
+          })
+          .eq(updateCol, userId);
+      } catch {}
+
+      return {
+        success: true,
+        handle,
+        role: "project-admin",
+        score: mergerScore,
+        merged_prs: 0,
+        projects_count: contributedRepos.size,
+        merged_pr_count: validMergePRs.length,
+      };
+    } catch (adminErr: unknown) {
+      console.error("Project Admin sync error:", adminErr);
+      return { success: false, error: adminErr instanceof Error ? adminErr.message : "Unknown error during project-admin sync." };
+    }
+  }
 
   try {
     // 5. Fetch ALL Merged PRs targeted strictly to the 17 competition projects.
@@ -459,6 +618,16 @@ export async function syncAllProjectsAndContributors() {
     projectMap.set(slug, p.id);
   }
 
+  // Pre-load profiles to get exact roles and github handles from DB
+  const { data: dbProfiles } = await admin
+    .from("profiles")
+    .select("id, user_id, role, github, is_admin, email");
+  const profileMap = new Map<string, { id: string; user_id?: string; role?: string; github?: string; is_admin?: boolean; email?: string }>();
+  for (const prof of dbProfiles || []) {
+    if (prof.user_id) profileMap.set(prof.user_id, prof);
+    if (prof.id) profileMap.set(prof.id, prof);
+  }
+
   // Map: normalized lowercase github handle -> array of valid merged PR items
   const contributorPrMap = new Map<
     string,
@@ -474,6 +643,12 @@ export async function syncAllProjectsAndContributors() {
 
   // Map: normalized github handle -> PRs merged by this person (for project-admin points)
   const mergerMap = new Map<
+    string,
+    Array<{ repoSlug: string; prNumber: number; htmlUrl: string; mergedAt: string }>
+  >();
+
+  // Map: repoSlug -> all merged PRs with OSCI'26 label in this repo
+  const repoPrMap = new Map<
     string,
     Array<{ repoSlug: string; prNumber: number; htmlUrl: string; mergedAt: string }>
   >();
@@ -507,6 +682,14 @@ export async function syncAllProjectsAndContributors() {
         htmlUrl,
         mergedAt,
       });
+    }
+
+    if (!repoPrMap.has(repoSlug)) {
+      repoPrMap.set(repoSlug, []);
+    }
+    const rList = repoPrMap.get(repoSlug)!;
+    if (!rList.some((p) => p.prNumber === prNumber)) {
+      rList.push({ repoSlug, prNumber, htmlUrl, mergedAt });
     }
   }
 
@@ -619,12 +802,6 @@ export async function syncAllProjectsAndContributors() {
     }
   }
 
-  // NOTE: The secondary batch search pass has been removed.
-  // The primary repo-centric sweep (pass 4) already fetches all closed PRs from every one of the
-  // 17 competition repos and filters by the OSCI'26 label — it captures 100% of valid PRs.
-  // The secondary pass added ~30s of sleep delays (repoGroups × handleBatches × 150ms) which
-  // caused consistent Vercel 504 timeouts without adding meaningful new coverage.
-
   let updatedCount = 0;
   const nowIso = new Date().toISOString();
   const adminEmail = (process.env.ADMIN_PORTAL_EMAIL || "sayanghosh1887@gmail.com").toLowerCase();
@@ -664,17 +841,19 @@ export async function syncAllProjectsAndContributors() {
   // 6. Aggregate each contributor across auth.users and compute points
   for (const user of authUsers) {
     const meta = user.user_metadata || {};
+    const prof = profileMap.get(user.id);
     const identities = user.identities || [];
-    const role = meta.role || (user.email?.toLowerCase() === adminEmail ? "admin" : "contributor");
-    const isAdmin = Boolean(meta.is_admin || role === "admin" || role === "project-admin");
+    const role = prof?.role || meta.role || (user.email?.toLowerCase() === adminEmail ? "admin" : "contributor");
+    const isAdmin = Boolean(prof?.is_admin || meta.is_admin || role === "admin" || role === "project-admin");
 
-    // Only contributors participate in leaderboard scoring
+    // Only contributors participate in contributor leaderboard scoring
     if (role !== "contributor" || isAdmin) {
       continue;
     }
 
     // Collect all handles that belong to this user
     const userHandles = new Set<string>();
+    if (prof?.github) userHandles.add(normalizeGitHubHandle(prof.github).toLowerCase());
     if (meta.github) userHandles.add(normalizeGitHubHandle(meta.github).toLowerCase());
     if (meta.user_name) userHandles.add(normalizeGitHubHandle(meta.user_name).toLowerCase());
     if (meta.preferred_username) userHandles.add(normalizeGitHubHandle(meta.preferred_username).toLowerCase());
@@ -713,7 +892,7 @@ export async function syncAllProjectsAndContributors() {
       currentPrs !== computedMergedPrs ||
       currentRepos !== computedProjects;
 
-    const primaryHandle = meta.github || meta.user_name || Array.from(userHandles)[0] || null;
+    const primaryHandle = prof?.github || meta.github || meta.user_name || Array.from(userHandles)[0] || null;
 
     // Accumulate individual PR contributions
     if (userPrs.length > 0) {
@@ -767,16 +946,18 @@ export async function syncAllProjectsAndContributors() {
     }
   }
 
-  // 7. Project-admin pass: award MERGER_POINTS for each OSCI'26-labelled PR they merged
+  // 7. Project-admin pass: award MERGER_POINTS for each OSCI'26-labelled PR in their repository or merged by them
   for (const user of authUsers) {
     const meta = user.user_metadata || {};
+    const prof = profileMap.get(user.id);
     const identities = user.identities || [];
-    const role = meta.role || "contributor";
-    // Only process project-admins (not super-admins, not contributors)
+    const role = prof?.role || meta.role || "contributor";
+    // Only process project-admins
     if (role !== "project-admin") continue;
 
     // Collect all GitHub handles belonging to this admin
     const userHandles = new Set<string>();
+    if (prof?.github) userHandles.add(normalizeGitHubHandle(prof.github).toLowerCase());
     if (meta.github) userHandles.add(normalizeGitHubHandle(meta.github).toLowerCase());
     if (meta.user_name) userHandles.add(normalizeGitHubHandle(meta.user_name).toLowerCase());
     if (meta.preferred_username) userHandles.add(normalizeGitHubHandle(meta.preferred_username).toLowerCase());
@@ -787,9 +968,23 @@ export async function syncAllProjectsAndContributors() {
       }
     }
 
-    // Aggregate all PRs this admin merged (deduped)
+    // Aggregate all PRs this admin gets credit for:
+    // 1. All PRs in repositories owned by this admin
+    // 2. All PRs merged by this admin in any competition repo
     const mergedByAdmin = new Map<string, { repoSlug: string; prNumber: number; htmlUrl: string; mergedAt: string }>();
     for (const handle of userHandles) {
+      // Repos owned by this admin
+      for (const [slug, prs] of repoPrMap.entries()) {
+        const repoOwner = slug.split("/")[0];
+        if (repoOwner === handle) {
+          for (const p of prs) {
+            const key = `${p.repoSlug}#${p.prNumber}`;
+            if (!mergedByAdmin.has(key)) mergedByAdmin.set(key, p);
+          }
+        }
+      }
+
+      // PRs explicitly merged by this admin
       for (const m of mergerMap.get(handle) || []) {
         const key = `${m.repoSlug}#${m.prNumber}`;
         if (!mergedByAdmin.has(key)) mergedByAdmin.set(key, m);
@@ -799,7 +994,8 @@ export async function syncAllProjectsAndContributors() {
     if (mergedByAdmin.size === 0) continue;
 
     const mergerScore = mergedByAdmin.size * MERGER_POINTS;
-    const primaryHandle = meta.github || meta.user_name || Array.from(userHandles)[0] || null;
+    const primaryHandle = prof?.github || meta.github || meta.user_name || Array.from(userHandles)[0] || null;
+    const adminProjects = new Set(Array.from(mergedByAdmin.values()).map((m) => m.repoSlug));
 
     // Store each merged PR as a "pr_merge" contribution row
     for (const m of mergedByAdmin.values()) {
@@ -831,7 +1027,7 @@ export async function syncAllProjectsAndContributors() {
       github: primaryHandle,
       score: mergerScore,
       merged_prs: 0, // project-admins don't author PRs
-      projects_count: new Set(Array.from(mergedByAdmin.values()).map((m) => m.repoSlug)).size,
+      projects_count: adminProjects.size,
       updated_at: nowIso,
     });
 
@@ -842,7 +1038,7 @@ export async function syncAllProjectsAndContributors() {
         github: primaryHandle,
         score: mergerScore,
         merged_prs: 0,
-        projects_count: new Set(Array.from(mergedByAdmin.values()).map((m) => m.repoSlug)).size,
+        projects_count: adminProjects.size,
       },
     });
 

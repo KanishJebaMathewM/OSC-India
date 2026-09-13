@@ -370,6 +370,7 @@ export default async function DashboardPage() {
           <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: "12px", marginBottom: "48px" }}>
             {(userContributions as Array<{
               id?: string;
+              type?: string;
               github_url: string;
               points_awarded?: number;
               contributed_at?: string;
@@ -377,15 +378,23 @@ export default async function DashboardPage() {
             }>).map((c) => {
               const project = Array.isArray(c.projects) ? c.projects[0] : c.projects;
               const projectName = project?.name || "Official Project";
-              const prMatch = c.github_url?.match(/\/pull\/(\d+)/);
+              const cleanUrl = (c.github_url || "").replace(/^merged:/, "");
+              const prMatch = cleanUrl.match(/\/pull\/(\d+)/);
               const prNumber = prMatch ? `#${prMatch[1]}` : "PR";
               const points = c.points_awarded || 10;
+              const isMergeCredit = c.type === "pr_merge" || (c.github_url || "").startsWith("merged:");
+
               let diffLabel = "Easy";
               let diffColor = "#34d399";
               let diffBg = "rgba(52,211,153,0.1)";
               let diffBorder = "rgba(52,211,153,0.25)";
 
-              if (points >= 50) {
+              if (isMergeCredit) {
+                diffLabel = "Project Merge";
+                diffColor = "#f97316";
+                diffBg = "rgba(249,115,22,0.1)";
+                diffBorder = "rgba(249,115,22,0.25)";
+              } else if (points >= 50) {
                 diffLabel = "Expert";
                 diffColor = "#f59e0b";
                 diffBg = "rgba(245,158,11,0.1)";
@@ -436,7 +445,7 @@ export default async function DashboardPage() {
                       <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
                         <span style={{ fontSize: "14px", fontWeight: 700, color: "white" }}>{projectName}</span>
                         <a
-                          href={c.github_url}
+                          href={cleanUrl}
                           target="_blank"
                           rel="noopener noreferrer"
                           style={{ color: "var(--orange)", fontSize: "13px", fontWeight: 600, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: "4px" }}
