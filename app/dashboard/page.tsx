@@ -32,22 +32,54 @@ export default async function DashboardPage() {
     user.user_metadata?.preferred_username ||
     null;
 
-  // 1. Fetch profile by user_id (foreign key to auth.users / public.users)
+  // 1. Fetch profile by user_id (foreign key added in migration 0003)
   let { data: profile } = await admin
     .from("profiles")
-    .select("*, users!inner(email)")
+    .select("*")
     .eq("user_id", user.id)
     .maybeSingle();
 
-  // 2. If not found by user_id, fallback search by GitHub username
+  // 2. If not found by user_id, fallback to id (PK, original auth.users ref from migration 0001).
+  //    The handle_new_user() trigger sets id = auth.users.id but NOT user_id,
+  //    so profiles created after migration 0003 have user_id = NULL.
+  if (!profile) {
+    const { data: byId } = await admin
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (byId) {
+      profile = byId;
+      // Backfill user_id so future lookups work directly
+      try {
+        await admin
+          .from("profiles")
+          .update({ user_id: user.id, updated_at: new Date().toISOString() })
+          .eq("id", user.id);
+      } catch {
+        // Non-blocking backfill
+      }
+    }
+  }
+
+  // 3. If still not found, fallback search by GitHub username
   if (!profile && metaGithub) {
     const { data: byGithub } = await admin
       .from("profiles")
-      .select("*, users!inner(email)")
+      .select("*")
       .ilike("github", metaGithub)
       .maybeSingle();
     if (byGithub) {
       profile = byGithub;
+      // Backfill user_id so future lookups work directly
+      try {
+        await admin
+          .from("profiles")
+          .update({ user_id: user.id, updated_at: new Date().toISOString() })
+          .eq("id", byGithub.id);
+      } catch {
+        // Non-blocking backfill
+      }
     }
   }
 
@@ -58,8 +90,10 @@ export default async function DashboardPage() {
     metaGithub ||
     null;
 
-  // Auto-provision profile only if genuinely missing from database
+  // Auto-provision profile ONLY if genuinely missing from database.
+  // Preserve existing role from auth metadata — never overwrite a project-admin/mentor/admin back to contributor.
   if (!profile) {
+    const existingRole = user.user_metadata?.role || "contributor";
     try {
       const { data: created, error: upsertErr } = await admin
         .from("profiles")
@@ -69,7 +103,7 @@ export default async function DashboardPage() {
             full_name: fullName,
             avatar_url: avatar,
             github: githubUsername,
-            role: "contributor",
+            role: existingRole,
             score: 0,
             merged_prs: 0,
             projects_count: 0,
@@ -79,7 +113,7 @@ export default async function DashboardPage() {
           },
           { onConflict: "user_id" }
         )
-        .select("*, users!inner(email)")
+        .select("*")
         .maybeSingle();
       if (upsertErr) {
         console.warn("Profile auto-provision warning:", upsertErr.message);
@@ -92,10 +126,12 @@ export default async function DashboardPage() {
     }
   } else if (!profile.github && metaGithub) {
     try {
+      const updateCol = profile.user_id ? "user_id" : "id";
+      const updateVal = profile.user_id || profile.id;
       await admin
         .from("profiles")
         .update({ github: metaGithub, updated_at: new Date().toISOString() })
-        .eq("user_id", user.id);
+        .eq(updateCol, updateVal);
       profile.github = metaGithub;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "GitHub sync error";
