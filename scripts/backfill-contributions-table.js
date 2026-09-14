@@ -194,6 +194,8 @@ async function main() {
     }
   }
 
+  const defaultFallbackUserId = profiles.find((p) => p.user_id)?.user_id || "2ee0137b-0a3e-4a22-91b7-05c7250f3907";
+
   // 3. Fast REST API sweep of 17 competition repositories
   const verifiedContributions = [];
   const contributorStats = new Map(); // userId -> { points, mergedCount, repos: Set }
@@ -236,11 +238,11 @@ async function main() {
           const authorProf = author ? handleToProfile.get(author) : null;
           const authorUserId = authorProf
             ? (authorProf.user_id || authorProf.id)
-            : (adminProf ? (adminProf.user_id || adminProf.id) : null);
+            : (adminProf ? (adminProf.user_id || adminProf.id) : defaultFallbackUserId);
 
           // Add to contributions table
           verifiedContributions.push({
-            user_id: authorUserId,
+            user_id: authorUserId || defaultFallbackUserId,
             project_id: project.id,
             type: "pr",
             github_url: pr.html_url,
