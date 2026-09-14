@@ -1,4 +1,4 @@
-﻿name: Automated OSCI'26 Leaderboard Sync
+name: Automated OSCI'26 Leaderboard Sync
 
 on:
   schedule:
@@ -17,7 +17,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install Supabase Client
         run: npm install @supabase/supabase-js dotenv
