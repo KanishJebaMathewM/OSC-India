@@ -303,6 +303,22 @@ export default async function DashboardPage(props: {
     ? managedProjects.length || 1
     : contributedProjects.length || Number(profile?.projects_count || 1);
 
+  // 10. Calculate user's leaderboard rank
+  let userRank = 1;
+  try {
+    const { count, error } = await admin
+      .from("profiles")
+      .select("id", { count: "exact", head: true })
+      .neq("role", "admin")
+      .or(`score.gt.${totalPoints},and(score.eq.${totalPoints},merged_prs.gt.${mergedPRs})`);
+
+    if (!error && count !== null) {
+      userRank = count + 1;
+    }
+  } catch (err) {
+    console.warn("Notice: Rank computation error:", err);
+  }
+
   // Viewer profile for Navbar
   const viewerProfilePayload = {
     id: targetUserId,
@@ -492,6 +508,7 @@ export default async function DashboardPage(props: {
           contributedProjects={contributedProjects}
           weeklyScore={weeklyScore}
           weeklyPRs={weeklyPRs}
+          rank={userRank}
         />
       </main>
 

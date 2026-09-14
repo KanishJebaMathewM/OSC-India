@@ -212,8 +212,8 @@ export async function getClientProfile(): Promise<ClientProfilePayload | null> {
       identityAvatar ||
       (github ? `https://avatars.githubusercontent.com/${github}` : null);
 
-    const role = profile?.role || "contributor";
-    const isAdmin = Boolean(profile?.role === "admin");
+    const role = profile?.role || user.user_metadata?.role || "contributor";
+    const isAdmin = Boolean(role === "admin" || user.user_metadata?.is_admin);
 
     return {
       id: user.id,
