@@ -1,7 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import LeaderboardUI from "./LeaderboardUI";
-import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
@@ -11,15 +10,7 @@ export default async function LeaderboardPage(props: {
   const supabase = await createClient();
   const {
     data: { user },
-    error: userError,
   } = await supabase.auth.getUser();
-
-  if (userError || !user) {
-    if (userError) {
-      console.warn("Leaderboard auth verification notice:", userError.message);
-    }
-    redirect("/sign-in?next=/leaderboard");
-  }
 
   const resolvedSearchParams = props?.searchParams ? await props.searchParams : {};
   const q = typeof resolvedSearchParams?.q === "string" ? resolvedSearchParams.q.trim() : "";
@@ -90,33 +81,37 @@ export default async function LeaderboardPage(props: {
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
-  let currentProfile = null;
-  const { data: profileByUserId } = await admin
-    .from("profiles")
-    .select("*")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  currentProfile = profileByUserId;
+  let profilePayload = null;
 
-  // Fallback to id (PK) — trigger sets id but not user_id
-  if (!currentProfile) {
-    const { data: profileById } = await admin
+  if (user) {
+    let currentProfile = null;
+    const { data: profileByUserId } = await admin
       .from("profiles")
       .select("*")
-      .eq("id", user.id)
+      .eq("user_id", user.id)
       .maybeSingle();
-    currentProfile = profileById;
-  }
+    currentProfile = profileByUserId;
 
-  const profilePayload = {
-    id: user.id,
-    name: currentProfile?.full_name || user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || "Contributor",
-    email: user.email,
-    avatar: currentProfile?.avatar_url || user.user_metadata?.avatar_url || user.user_metadata?.picture || null,
-    role: currentProfile?.role || user.user_metadata?.role || "contributor",
-    isAdmin: Boolean(currentProfile?.is_admin || user.user_metadata?.is_admin),
-    github: currentProfile?.github || user.user_metadata?.github || user.user_metadata?.user_name || null,
-  };
+    // Fallback to id (PK) — trigger sets id but not user_id
+    if (!currentProfile) {
+      const { data: profileById } = await admin
+        .from("profiles")
+        .select("*")
+        .eq("id", user.id)
+        .maybeSingle();
+      currentProfile = profileById;
+    }
+
+    profilePayload = {
+      id: user.id,
+      name: currentProfile?.full_name || user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || "Contributor",
+      email: user.email,
+      avatar: currentProfile?.avatar_url || user.user_metadata?.avatar_url || user.user_metadata?.picture || null,
+      role: currentProfile?.role || user.user_metadata?.role || "contributor",
+      isAdmin: Boolean(currentProfile?.is_admin || user.user_metadata?.is_admin),
+      github: currentProfile?.github || user.user_metadata?.github || user.user_metadata?.user_name || null,
+    };
+  }
 
   return (
     <LeaderboardUI

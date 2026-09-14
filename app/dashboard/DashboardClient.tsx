@@ -51,6 +51,7 @@ interface DashboardClientProps {
   contributedProjects?: ProjectSummary[];
   weeklyScore?: number;
   weeklyPRs?: number;
+  rank?: number | null;
 }
 
 export default function DashboardClient({
@@ -62,6 +63,7 @@ export default function DashboardClient({
   contributedProjects = [],
   weeklyScore = 120,
   weeklyPRs = 12,
+  rank = 1,
 }: DashboardClientProps) {
   const [techStack, setTechStack] = useState<string[]>(
     profile.tech_stack && profile.tech_stack.length > 0
@@ -255,7 +257,7 @@ export default function DashboardClient({
 
             {/* Orange Circle Verified Badge */}
             <div
-              title="Verified Contributor"
+              title="Verified"
               style={{
                 position: "absolute",
                 bottom: "0px",
@@ -355,7 +357,7 @@ export default function DashboardClient({
                 border: "1px solid rgba(59, 130, 246, 0.35)",
               }}
             >
-              <span>✓</span> Verified Contributor
+              <span>✓</span> Verified
             </span>
           </div>
 
@@ -403,7 +405,7 @@ export default function DashboardClient({
                     OSCG 2026 ID Card
                   </div>
                   <div style={{ fontSize: "11px", color: "#8b929e", marginTop: "2px" }}>
-                    {profile.badges_created}/3 badges created
+                    Official Digital Badge
                   </div>
                 </div>
               </div>
@@ -589,8 +591,9 @@ export default function DashboardClient({
               </div>
             </div>
 
-            {/* 4. Badges */}
-            <div
+            {/* 4. Rank */}
+            <Link
+              href="/leaderboard"
               style={{
                 background: "#0d0e12",
                 border: "1px solid #1c1e26",
@@ -601,7 +604,10 @@ export default function DashboardClient({
                 justifyContent: "space-between",
                 minHeight: "140px",
                 boxSizing: "border-box",
+                textDecoration: "none",
+                transition: "all 0.15s ease",
               }}
+              className="hover:border-[rgba(245,158,11,0.4)] hover:bg-[#121319]"
             >
               <div>
                 <div
@@ -624,16 +630,17 @@ export default function DashboardClient({
                   </svg>
                 </div>
                 <div style={{ fontSize: "12px", fontWeight: 600, color: "#8b929e", marginBottom: "4px" }}>
-                  Badges
+                  Rank
                 </div>
                 <div style={{ fontSize: "28px", fontWeight: 800, color: "#f59e0b", lineHeight: 1 }}>
-                  {profile.badges_created}/3
+                  #{rank && rank > 0 ? rank : 1}
                 </div>
               </div>
-              <div style={{ fontSize: "12px", color: "#8b929e", marginTop: "8px" }}>
-                Keep going!
+              <div style={{ fontSize: "12px", color: "#8b929e", marginTop: "8px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>Leaderboard position</span>
+                <span style={{ color: "#f59e0b", fontWeight: 700 }}>&rarr;</span>
               </div>
-            </div>
+            </Link>
           </div>
 
           {/* Row 2: Projects Information (Managed Project for Admin / Contributed Projects for Contributor) + Tech Stack */}
