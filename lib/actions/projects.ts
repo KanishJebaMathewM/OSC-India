@@ -17,6 +17,8 @@ export interface ProjectItem {
   accentColor: string;
   stars?: string;
   forks?: string;
+  openIssues?: string;
+  unassignedIssues?: string;
   created_at?: string;
 }
 
@@ -280,6 +282,8 @@ function parseProjectFromDb(row: DbProjectRow): ProjectItem {
   let accentColor = "#FF7518";
   let stars = "0";
   let forks = "0";
+  let openIssues = "0";
+  let unassignedIssues = "0";
 
   if (row.language) language = row.language;
   if (row.accent_color || row.accentColor) accentColor = row.accent_color || row.accentColor || "#FF7518";
@@ -294,6 +298,8 @@ function parseProjectFromDb(row: DbProjectRow): ProjectItem {
       if (parsed.accentColor) accentColor = parsed.accentColor;
       if (parsed.stars) stars = String(parsed.stars);
       if (parsed.forks) forks = String(parsed.forks);
+      if (parsed.openIssues !== undefined) openIssues = String(parsed.openIssues);
+      if (parsed.unassignedIssues !== undefined) unassignedIssues = String(parsed.unassignedIssues);
       cleanDesc = cleanDesc.replace(/<!--meta:(.*?)-->/, "").trim();
     } catch {
       // ignore parse error
@@ -309,6 +315,8 @@ function parseProjectFromDb(row: DbProjectRow): ProjectItem {
     accentColor,
     stars,
     forks,
+    openIssues,
+    unassignedIssues,
     created_at: row.created_at,
   };
 }
