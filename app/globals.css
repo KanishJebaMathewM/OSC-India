@@ -1025,3 +1025,21 @@ input:autofill {
   }
 }
 
+/* ===========================
+   DASHBOARD RESPONSIVE GRIDS
+   =========================== */
+@media (max-width: 1023px) {
+  .dashboard-top-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .dashboard-metrics-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-metrics-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
