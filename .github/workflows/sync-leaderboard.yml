@@ -6,6 +6,7 @@ on:
     - cron: '*/15 * * * *'
   workflow_dispatch: # Allows 1-click trigger from GitHub Actions tab
 
+  
 jobs:
   sync-leaderboard:
     name: Sync Points & Leaderboard
